@@ -1,0 +1,176 @@
+// macOS Ventura Design System
+:root {
+  // ─── Backgrounds ───
+  --bg-primary: #1C1C1E;
+  --bg-secondary: #2C2C2E;
+  --bg-tertiary: #3A3A3C;
+  --bg-elevated: #48484A;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.08);
+
+  // ─── Text ───
+  --text-primary: #FFFFFF;
+  --text-secondary: #98989D;
+  --text-tertiary: #636366;
+  --text-quaternary: #48484A;
+
+  // ─── Accent ───
+  --accent-blue: #0A84FF;
+  --accent-green: #30D158;
+  --accent-red: #FF453A;
+  --accent-orange: #FF9F0A;
+  --accent-yellow: #FFD60A;
+  --accent-purple: #BF5AF2;
+  --accent-pink: #FF375F;
+  --accent-teal: #64D2FF;
+
+  // ─── Traffic Lights ───
+  --traffic-red: #FF5F57;
+  --traffic-yellow: #FEBC2E;
+  --traffic-green: #28C840;
+
+  // ─── Borders ───
+  --border-color: rgba(255, 255, 255, 0.1);
+  --border-light: rgba(255, 255, 255, 0.06);
+
+  // ─── Glass ───
+  --glass-bg: rgba(44, 44, 46, 0.8);
+  --glass-blur: blur(20px);
+
+  // ─── Spacing ───
+  --sidebar-width: 260px;
+  --topbar-height: 44px;
+  --statusbar-height: 28px;
+  --panel-radius: 10px;
+  --bubble-radius: 18px;
+
+  // ─── Fonts ───
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display',
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
+
+  // ─── Shadows ───
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+
+  // ─── Transitions ───
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.25s ease;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+// ─── Scrollbar ───
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.25);
+  }
+}
+
+// ─── Selection ───
+::selection {
+  background: rgba(10, 132, 255, 0.4);
+  color: #fff;
+}
+
+// ─── Divider helper ───
+.divider {
+  height: 0.5px;
+  background: var(--border-color);
+  border: none;
+}
+
+// ─── Glass panel ───
+.glass-panel {
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  background: var(--glass-bg);
+}
+
+// ─── Focus ring ───
+*:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+// ─── Naive UI dark overrides ───
+.n-config-provider {
+  height: 100%;
+}
+
+// ─── Light mode ───
+[data-theme="light"] {
+  --bg-primary: #FFFFFF;
+  --bg-secondary: #F2F2F7;
+  --bg-tertiary: #E5E5EA;
+  --bg-elevated: #D1D1D6;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-active: rgba(0, 0, 0, 0.06);
+
+  --text-primary: #1C1C1E;
+  --text-secondary: #636366;
+  --text-tertiary: #AEAEB2;
+  --text-quaternary: #C7C7CC;
+
+  --accent-blue: #007AFF;
+  --accent-green: #28A745;
+  --accent-red: #FF3B30;
+  --accent-orange: #FF9500;
+  --accent-yellow: #FFCC00;
+  --accent-purple: #AF52DE;
+  --accent-pink: #FF2D55;
+  --accent-teal: #5AC8FA;
+
+  --border-color: rgba(0, 0, 0, 0.1);
+  --border-light: rgba(0, 0, 0, 0.06);
+
+  --glass-bg: rgba(242, 242, 247, 0.8);
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="light"] {
+  ::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.15);
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.25);
+    }
+  }
+
+  ::selection {
+    background: rgba(0, 122, 255, 0.3);
+    color: #1C1C1E;
+  }
+}

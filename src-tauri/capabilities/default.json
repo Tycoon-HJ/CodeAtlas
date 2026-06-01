@@ -1,0 +1,20 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for CodeAtlas Studio",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-execute",
+    "shell:allow-spawn",
+    "shell:allow-stdin-write",
+    "shell:allow-kill",
+    "shell:default",
+    "sql:default",
+    "fs:default",
+    "fs:allow-read-dir",
+    "fs:allow-exists",
+    "fs:allow-stat",
+    "dialog:default",
+    "store:default"
+  ]
+}
