@@ -49,8 +49,8 @@ const agentStore = useAgentStore()
 
 .agent-list {
   background: var(--bg-secondary);
-  border: 0.5px solid var(--border-color);
-  border-radius: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
   overflow: hidden;
 }
 
@@ -59,7 +59,7 @@ const agentStore = useAgentStore()
   align-items: center;
   justify-content: space-between;
   padding: 14px 18px;
-  border-bottom: 0.5px solid var(--border-color);
+  border-bottom: 1px solid var(--border-default);
   transition: background var(--transition-fast);
 
   &:last-child {
@@ -83,9 +83,9 @@ const agentStore = useAgentStore()
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(10, 132, 255, 0.1);
-  border-radius: 8px;
-  color: var(--accent-blue);
+  background: var(--primary-light);
+  border-radius: var(--radius-lg);
+  color: var(--primary);
 }
 
 .agent-details {
@@ -105,7 +105,7 @@ const agentStore = useAgentStore()
   color: var(--text-tertiary);
 
   &.enabled {
-    color: var(--accent-green);
+    color: var(--success);
   }
 }
 </style>

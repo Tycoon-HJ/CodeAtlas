@@ -182,7 +182,7 @@ function getIcon(icon: string): string {
   width: 520px;
   max-height: 400px;
   background: var(--bg-secondary);
-  border: 0.5px solid var(--border-color);
+  border: 0.5px solid var(--border-default);
   border-radius: 12px;
   box-shadow: var(--shadow-lg);
   overflow: hidden;
@@ -195,7 +195,7 @@ function getIcon(icon: string): string {
   align-items: center;
   gap: 10px;
   padding: 12px 16px;
-  border-bottom: 0.5px solid var(--border-color);
+  border-bottom: 0.5px solid var(--border-default);
 }
 
 .search-icon {
@@ -232,7 +232,7 @@ function getIcon(icon: string): string {
   transition: background var(--transition-fast);
 
   &.selected {
-    background: rgba(10, 132, 255, 0.15);
+    background: var(--primary-light);
   }
 
   &:hover {

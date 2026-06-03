@@ -4,13 +4,16 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
-import type { Project } from '@/types'
+import * as api from '@/api'
+import type { Project, Message } from '@/types'
 
 const props = defineProps<{ projectId: string }>()
 const router = useRouter()
 const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const loading = ref(true)
+const searchQuery = ref('')
+const sessionFirstMessages = ref<Record<string, string>>({})
 
 onMounted(async () => {
   await projectStore.fetchProjects()
@@ -21,6 +24,8 @@ onMounted(async () => {
     const { invoke } = await import('@tauri-apps/api/core')
     invoke('open_project', { id: project.id }).catch(() => {})
   }
+  // Load first message for each session
+  await loadSessionFirstMessages()
   loading.value = false
 })
 
@@ -32,22 +37,50 @@ const projectSessions = computed(() =>
   sessionStore.sessions.filter((s) => s.taskId === props.projectId)
 )
 
-const recentSessions = computed(() =>
-  [...projectSessions.value]
+async function loadSessionFirstMessages() {
+  const sessions = projectSessions.value
+  const results: Record<string, string> = {}
+  for (const session of sessions) {
+    try {
+      const messages = await api.listMessages(session.id)
+      const firstUserMsg = messages.find((m: any) => m.type === 'user')
+      if (firstUserMsg) {
+        const content = firstUserMsg.content as string
+        results[session.id] = content.length > 50 ? content.slice(0, 50) + '...' : content
+      }
+    } catch (e) {
+      console.error(`Failed to load messages for session ${session.id}:`, e)
+    }
+  }
+  sessionFirstMessages.value = results
+}
+
+const filteredSessions = computed(() => {
+  const q = searchQuery.value.toLowerCase()
+  let list = [...projectSessions.value]
+    .filter((s) => sessionFirstMessages.value[s.id]) // Only show sessions with messages
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .slice(0, 8)
-)
+  if (q) {
+    list = list.filter((s) => {
+      const title = sessionFirstMessages.value[s.id] ?? ''
+      return title.toLowerCase().includes(q)
+    })
+  }
+  return list
+})
 
 function formatTime(dateStr: string): string {
-  const d = new Date(dateStr)
-  const now = new Date()
-  const diffMs = now.getTime() - d.getTime()
-  const diffMins = Math.floor(diffMs / 60000)
-  if (diffMins < 1) return '刚刚'
-  if (diffMins < 60) return `${diffMins}分钟前`
-  const diffHours = Math.floor(diffMins / 60)
-  if (diffHours < 24) return `${diffHours}小时前`
-  return `${d.getMonth() + 1}/${d.getDate()}`
+  if (!dateStr) return ''
+  // Handle both ISO string and millisecond timestamp
+  const d = /^\d+$/.test(dateStr) ? new Date(Number(dateStr)) : new Date(dateStr)
+  if (isNaN(d.getTime())) return ''
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hours = String(d.getHours()).padStart(2, '0')
+  const minutes = String(d.getMinutes()).padStart(2, '0')
+  const seconds = String(d.getSeconds()).padStart(2, '0')
+  return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`
 }
 
 function goToChat() {
@@ -77,7 +110,7 @@ async function deleteSession(sessionId: string) {
       <div class="header-main">
         <div class="project-title-row">
           <h1 class="project-title">{{ project.name }}</h1>
-          <NTag v-if="project.isFavorite" size="small" :bordered="false" style="background: rgba(255, 159, 10, 0.15); color: var(--accent-orange)">收藏</NTag>
+          <NTag v-if="project.isFavorite" size="small" :bordered="false" style="background: var(--warning-light); color: var(--warning)">收藏</NTag>
         </div>
         <div class="project-path">{{ project.path }}</div>
         <div v-if="project.description" class="project-desc">{{ project.description }}</div>
@@ -90,34 +123,49 @@ async function deleteSession(sessionId: string) {
       </button>
     </div>
 
-    <!-- Recent sessions -->
+    <!-- Sessions -->
     <div class="section-card">
       <div class="section-header">
-        <span class="section-title">最近会话</span>
-        <button class="section-action" @click="goToChat">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <path d="M7 2v10M2 7h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          新建
-        </button>
+        <span class="section-title">会话列表</span>
+        <div class="header-actions">
+          <div class="search-wrapper">
+            <svg class="search-icon" width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.2"/>
+              <path d="M11 11l3 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            </svg>
+            <input
+              v-model="searchQuery"
+              class="search-input"
+              placeholder="搜索会话..."
+            />
+          </div>
+          <button class="section-action" @click="goToChat">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 2v10M2 7h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            </svg>
+            新建
+          </button>
+        </div>
       </div>
 
-      <div v-if="recentSessions.length === 0" class="empty-section">
+      <div v-if="filteredSessions.length === 0" class="empty-section">
         <svg width="32" height="32" viewBox="0 0 32 32" fill="none" style="opacity: 0.3">
           <path d="M6 8h20a2 2 0 012 2v12a2 2 0 01-2 2H12l-6 4V10a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/>
         </svg>
-        <NText depth="3" style="font-size: 13px; color: var(--text-tertiary); margin-top: 8px">暂无会话</NText>
+        <NText depth="3" style="font-size: 13px; color: var(--text-tertiary); margin-top: 8px">
+          {{ searchQuery ? '没有匹配的会话' : '暂无会话' }}
+        </NText>
       </div>
 
-      <div v-else class="sessions-grid">
+      <div v-else class="sessions-list">
         <div
-          v-for="s in recentSessions"
+          v-for="s in filteredSessions"
           :key="s.id"
           class="session-card"
           @click="goToSession(s.id)"
         >
           <div class="session-card-header">
-            <span class="session-card-title">{{ s.title ?? `会话 ${s.id.slice(0, 8)}` }}</span>
+            <span class="session-card-title">{{ sessionFirstMessages[s.id] }}</span>
             <NPopconfirm @positive-click="deleteSession(s.id)">
               <template #trigger>
                 <button class="session-delete" @click.stop title="删除">
@@ -159,8 +207,8 @@ async function deleteSession(sessionId: string) {
 .loading-spinner {
   width: 24px;
   height: 24px;
-  border: 2px solid var(--border-color);
-  border-top-color: var(--accent-blue);
+  border: 2px solid var(--border-default);
+  border-top-color: var(--primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -216,7 +264,7 @@ async function deleteSession(sessionId: string) {
   gap: 6px;
   padding: 8px 16px;
   border: none;
-  background: var(--accent-blue);
+  background: var(--primary);
   color: #fff;
   border-radius: 8px;
   font-size: 13px;
@@ -226,7 +274,7 @@ async function deleteSession(sessionId: string) {
   flex-shrink: 0;
 
   &:hover {
-    background: #409CFF;
+    background: var(--primary-hover);
     transform: translateY(-1px);
   }
 
@@ -238,7 +286,7 @@ async function deleteSession(sessionId: string) {
 // ─── Section card ───
 .section-card {
   background: var(--bg-secondary);
-  border: 0.5px solid var(--border-color);
+  border: 0.5px solid var(--border-default);
   border-radius: 12px;
   overflow: hidden;
 }
@@ -248,13 +296,56 @@ async function deleteSession(sessionId: string) {
   align-items: center;
   justify-content: space-between;
   padding: 14px 18px;
-  border-bottom: 0.5px solid var(--border-color);
+  border-bottom: 1px solid var(--border-default);
+  gap: 12px;
 }
 
 .section-title {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-wrapper {
+  position: relative;
+  width: 200px;
+}
+
+.search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.search-input {
+  width: 100%;
+  padding: 6px 10px 6px 30px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  outline: none;
+  transition: border-color var(--transition-fast);
+
+  &:focus {
+    border-color: var(--primary);
+  }
+
+  &::placeholder {
+    color: var(--text-disabled);
+  }
 }
 
 .section-action {
@@ -264,7 +355,7 @@ async function deleteSession(sessionId: string) {
   padding: 4px 10px;
   border: none;
   background: transparent;
-  color: var(--accent-blue);
+  color: var(--primary);
   font-size: 12px;
   font-weight: 500;
   border-radius: 6px;
@@ -272,7 +363,7 @@ async function deleteSession(sessionId: string) {
   transition: all var(--transition-fast);
 
   &:hover {
-    background: rgba(10, 132, 255, 0.1);
+    background: var(--primary-light);
   }
 }
 
@@ -284,19 +375,21 @@ async function deleteSession(sessionId: string) {
   padding: 40px 20px;
 }
 
-// ─── Sessions grid ───
-.sessions-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 1px;
-  background: var(--border-color);
+// ─── Sessions list ───
+.sessions-list {
+  display: flex;
+  flex-direction: column;
 }
 
 .session-card {
   padding: 14px 18px;
   cursor: pointer;
   transition: background var(--transition-fast);
-  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-default);
+
+  &:last-child {
+    border-bottom: none;
+  }
 
   &:hover {
     background: var(--bg-hover);
@@ -340,8 +433,8 @@ async function deleteSession(sessionId: string) {
   }
 
   &:hover {
-    background: rgba(255, 69, 58, 0.12);
-    color: var(--accent-red);
+    background: var(--error-light);
+    color: var(--error);
   }
 }
 
@@ -367,8 +460,18 @@ async function deleteSession(sessionId: string) {
     font-size: 20px;
   }
 
-  .sessions-grid {
-    grid-template-columns: 1fr;
+  .section-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .header-actions {
+    width: 100%;
+  }
+
+  .search-wrapper {
+    width: 100%;
+    flex: 1;
   }
 }
 </style>

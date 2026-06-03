@@ -9,7 +9,7 @@ use crate::log_info;
 use crate::log_error;
 use crate::log_debug;
 use crate::log_warn;
-use crate::models::ClaudeOutput;
+use crate::models::{ClaudeOutput, ToolCall};
 use crate::pty;
 
 /// Global state for child processes (used by -p mode), so we can kill them if user aborts.
@@ -214,6 +214,7 @@ impl ClaudeAdapter {
                             if let Some(content_arr) = message.get("content").and_then(|c| c.as_array()) {
                                 let mut text_buf = String::new();
                                 let mut thinking_buf = String::new();
+                                let mut tool_calls_buf = Vec::new();
 
                                 for block in content_arr {
                                     let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -232,6 +233,11 @@ impl ClaudeAdapter {
                                             let tool_id = block.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                             let tool_name = block.get("name").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
                                             let tool_input = block.get("input").cloned().unwrap_or(serde_json::Value::Null);
+                                            tool_calls_buf.push(ToolCall {
+                                                tool_id: tool_id.clone(),
+                                                tool_name: tool_name.clone(),
+                                                tool_input: tool_input.clone(),
+                                            });
                                             let _ = app.emit("claude-tool-call", serde_json::json!({
                                                 "session_id": session_id_clone.clone(),
                                                 "tool_id": tool_id,
@@ -250,6 +256,7 @@ impl ClaudeAdapter {
                                         content: text_buf,
                                         thinking: thinking_buf,
                                         done: false,
+                                        tool_calls: if tool_calls_buf.is_empty() { None } else { Some(tool_calls_buf) },
                                     });
                                 }
                             }
@@ -262,6 +269,7 @@ impl ClaudeAdapter {
                             content: final_text.to_string(),
                             thinking: String::new(),
                             done: true,
+                            tool_calls: None,
                         });
                     }
                     "system" => {
@@ -323,6 +331,7 @@ impl ClaudeAdapter {
                     content: "会话已终止".to_string(),
                     thinking: String::new(),
                     done: true,
+                    tool_calls: None,
                 });
                 if let Ok(mut map) = PTY_TRUST_RESOLVED.lock() {
                     map.remove(&sid);
@@ -338,6 +347,7 @@ impl ClaudeAdapter {
                     content: format!("PTY 写入失败: {}", e),
                     thinking: String::new(),
                     done: true,
+                    tool_calls: None,
                 });
             }
             // Cleanup trust resolved entry
@@ -364,6 +374,7 @@ impl ClaudeAdapter {
                     content: format!("PTY 写入失败: {}", e),
                     thinking: String::new(),
                     done: true,
+                    tool_calls: None,
                 });
             }
         });
@@ -402,6 +413,8 @@ impl ClaudeAdapter {
             log_info!("claude", "[{}] Resuming Claude session: {}", session_id, resume_id);
         }
 
+        let resume_session_id_for_stdin = resume_session_id.clone();
+
         std::thread::spawn(move || {
             let home = if cfg!(target_os = "windows") {
                 std::env::var("USERPROFILE").unwrap_or_default()
@@ -409,12 +422,23 @@ impl ClaudeAdapter {
                 std::env::var("HOME").unwrap_or_default()
             };
 
-            let mut base_args = vec![
-                "-p".to_string(), message.clone(),
-                "--output-format".to_string(), "stream-json".to_string(),
-                "--verbose".to_string(),
-                "--permission-mode".to_string(), "auto".to_string(),
-            ];
+            // Use --resume if we have a session ID, otherwise use -p with stdin
+            let mut base_args = if resume_session_id.is_some() {
+                vec![
+                    "-p".to_string(), message.clone(),
+                    "--output-format".to_string(), "stream-json".to_string(),
+                    "--verbose".to_string(),
+                    "--permission-mode".to_string(), "auto".to_string(),
+                ]
+            } else {
+                // For new sessions, use stdin to pass the message
+                // This avoids command line length limits and preserves newlines
+                vec![
+                    "--output-format".to_string(), "stream-json".to_string(),
+                    "--verbose".to_string(),
+                    "--permission-mode".to_string(), "auto".to_string(),
+                ]
+            };
 
             if let Some(ref resume_id) = resume_session_id {
                 base_args.push("--resume".to_string());
@@ -458,6 +482,7 @@ impl ClaudeAdapter {
             let result = Command::new(&cmd)
                 .args(&args)
                 .current_dir(&working_dir)
+                .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .env("PATH", &path)
@@ -475,10 +500,30 @@ impl ClaudeAdapter {
                         content: format!("无法启动 Claude CLI: {}", e),
                         thinking: String::new(),
                         done: true,
+                        tool_calls: None,
                     });
                     return;
                 }
             };
+
+            // Write message to stdin for new sessions (not resuming)
+            if resume_session_id_for_stdin.is_some() {
+                // Resume mode uses -p flag, no stdin needed
+            } else {
+                // New session: write message to stdin
+                if let Some(mut stdin) = child.stdin.take() {
+                    use std::io::Write;
+                    let msg_clone = message.clone();
+                    std::thread::spawn(move || {
+                        if let Err(e) = stdin.write_all(msg_clone.as_bytes()) {
+                            log_error!("claude", "Failed to write to stdin: {}", e);
+                        }
+                        if let Err(e) = stdin.flush() {
+                            log_error!("claude", "Failed to flush stdin: {}", e);
+                        }
+                    });
+                }
+            }
 
             let stdout = child.stdout.take().expect("failed to take stdout");
             let stderr = child.stderr.take().expect("failed to take stderr");
@@ -508,6 +553,7 @@ impl ClaudeAdapter {
             let mut thinking_buf = String::new();
             let mut text_buf = String::new();
             let mut tool_count = 0u32;
+            let mut tool_calls_buf: Vec<ToolCall> = Vec::new();
             let mut result_received = false;
 
             for line in reader.lines() {
@@ -526,7 +572,19 @@ impl ClaudeAdapter {
 
                 let parsed: serde_json::Value = match serde_json::from_str(line) {
                     Ok(v) => v,
-                    Err(_) => continue,
+                    Err(_) => {
+                        // Not JSON — emit as output so user can see the message
+                        text_buf.push_str(line);
+                        text_buf.push('\n');
+                        let _ = app.emit("claude-output", ClaudeOutput {
+                            session_id: session_id_clone.clone(),
+                            content: text_buf.clone(),
+                            thinking: thinking_buf.clone(),
+                            done: false,
+                            tool_calls: None,
+                        });
+                        continue;
+                    }
                 };
 
                 let msg_type = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -547,6 +605,7 @@ impl ClaudeAdapter {
                                                     content: String::new(),
                                                     thinking: thinking_buf.clone(),
                                                     done: false,
+                                                    tool_calls: None,
                                                 });
                                             }
                                         }
@@ -558,6 +617,7 @@ impl ClaudeAdapter {
                                                     content: text_buf.clone(),
                                                     thinking: thinking_buf.clone(),
                                                     done: false,
+                                                    tool_calls: None,
                                                 });
                                             }
                                         }
@@ -566,6 +626,11 @@ impl ClaudeAdapter {
                                             let tool_id = block.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                             let tool_name = block.get("name").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
                                             let tool_input = block.get("input").cloned().unwrap_or(serde_json::Value::Null);
+                                            tool_calls_buf.push(ToolCall {
+                                                tool_id: tool_id.clone(),
+                                                tool_name: tool_name.clone(),
+                                                tool_input: tool_input.clone(),
+                                            });
                                             let _ = app.emit("claude-tool-call", serde_json::json!({
                                                 "session_id": session_id_clone.clone(),
                                                 "tool_id": tool_id,
@@ -591,6 +656,7 @@ impl ClaudeAdapter {
                             content,
                             thinking: thinking_buf.clone(),
                             done: true,
+                            tool_calls: if tool_calls_buf.is_empty() { None } else { Some(tool_calls_buf.clone()) },
                         });
                     }
                     "system" => {
@@ -631,6 +697,7 @@ impl ClaudeAdapter {
                         content: "Claude CLI 未返回内容".to_string(),
                         thinking: String::new(),
                         done: true,
+                        tool_calls: None,
                     });
                 } else {
                     log_warn!("claude", "[{}] Process ended without result event", session_id_clone);
@@ -639,6 +706,7 @@ impl ClaudeAdapter {
                         content: text_buf.clone(),
                         thinking: thinking_buf.clone(),
                         done: true,
+                        tool_calls: if tool_calls_buf.is_empty() { None } else { Some(tool_calls_buf.clone()) },
                     });
                 }
             }

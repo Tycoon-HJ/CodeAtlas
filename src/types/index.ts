@@ -40,13 +40,24 @@ export interface Session {
 // Message
 export type MessageType = 'user' | 'assistant' | 'system' | 'tool'
 
+export interface ToolCall {
+  toolId: string
+  toolName: string
+  toolInput: Record<string, unknown>
+}
+
+export interface MessageMetadata {
+  thinking?: string
+  toolCalls?: ToolCall[]
+}
+
 export interface Message {
   id: string
   sessionId: string
   type: MessageType
   content: string
   thinking?: string
-  metadata?: Record<string, unknown>
+  metadata?: MessageMetadata
   createdAt: string
 }
 

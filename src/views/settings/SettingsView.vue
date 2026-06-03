@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { NCard, NForm, NFormItem, NInput, NSelect, NSpace, NText, NTabs, NTabPane, NSwitch, NInputNumber } from 'naive-ui'
+import { NCard, NForm, NFormItem, NInput, NSelect, NSpace, NText, NTabs, NTabPane } from 'naive-ui'
 import { useSettingsStore } from '@/stores/settings'
-import { ref } from 'vue'
 
 const settingsStore = useSettingsStore()
 
@@ -32,18 +31,6 @@ function updateField(key: string, value: string) {
                 :options="[{ label: '简体中文', value: 'zh-CN' }, { label: 'English', value: 'en' }]"
                 @update:value="(v: string) => updateField('locale', v)" />
             </NFormItem>
-            <NFormItem label="字体大小">
-              <NInputNumber :value="settingsStore.settings.fontSize" :min="10" :max="24"
-                @update:value="(v: number | null) => updateField('fontSize', String(v ?? 14))" />
-            </NFormItem>
-            <NFormItem label="自动滚动">
-              <NSwitch :value="settingsStore.settings.autoScroll"
-                @update:value="(v: boolean) => updateField('autoScroll', String(v))" />
-            </NFormItem>
-            <NFormItem label="自动刷新">
-              <NSwitch :value="settingsStore.settings.autoRefresh"
-                @update:value="(v: boolean) => updateField('autoRefresh', String(v))" />
-            </NFormItem>
           </NForm>
         </NCard>
       </NTabPane>
@@ -65,13 +52,6 @@ function updateField(key: string, value: string) {
                 @update:value="(v: string) => updateField('claudeConfigPath', v)"
               />
             </NFormItem>
-            <NFormItem label="终端 Shell">
-              <NInput
-                :value="settingsStore.settings.terminalShell"
-                placeholder="留空使用默认 Shell (如: /bin/zsh)"
-                @update:value="(v: string) => updateField('terminalShell', v)"
-              />
-            </NFormItem>
           </NForm>
           <div class="settings-hint">
             <NText depth="3" style="font-size: 12px">
@@ -82,18 +62,30 @@ function updateField(key: string, value: string) {
         </NCard>
       </NTabPane>
 
-      <NTabPane name="git" tab="Git">
+      <NTabPane name="codex" tab="Codex">
         <NCard :bordered="false" style="background: var(--bg-secondary)">
-          <NForm label-placement="left" label-width="100">
-            <NFormItem label="用户名">
-              <NInput :value="settingsStore.settings.gitUserName" placeholder="Git 用户名"
-                @update:value="(v: string) => updateField('gitUserName', v)" />
+          <NForm label-placement="left" label-width="120">
+            <NFormItem label="Codex CLI 路径">
+              <NInput
+                :value="settingsStore.settings.codexPath"
+                placeholder="留空使用默认路径 (如: ~/.codex/bin/codex)"
+                @update:value="(v: string) => updateField('codexPath', v)"
+              />
             </NFormItem>
-            <NFormItem label="邮箱">
-              <NInput :value="settingsStore.settings.gitUserEmail" placeholder="Git 邮箱"
-                @update:value="(v: string) => updateField('gitUserEmail', v)" />
+            <NFormItem label="配置文件路径">
+              <NInput
+                :value="settingsStore.settings.codexConfigPath"
+                placeholder="留空使用默认配置 (如: ~/.codex/config.toml)"
+                @update:value="(v: string) => updateField('codexConfigPath', v)"
+              />
             </NFormItem>
           </NForm>
+          <div class="settings-hint">
+            <NText depth="3" style="font-size: 12px">
+              CLI 路径：指定 codex 可执行文件的完整路径。留空则自动检测。<br/>
+              配置文件：指定 Codex 的配置文件路径，可用于自定义模型、API Key 等设置。
+            </NText>
+          </div>
         </NCard>
       </NTabPane>
 
@@ -129,8 +121,8 @@ function updateField(key: string, value: string) {
 .settings-hint {
   margin-top: 8px;
   padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-hover);
   border-radius: 8px;
-  border: 0.5px solid var(--border-color);
+  border: 0.5px solid var(--border-default);
 }
 </style>

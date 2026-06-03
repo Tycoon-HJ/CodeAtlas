@@ -69,4 +69,16 @@ pub struct ClaudeOutput {
     pub content: String,
     pub thinking: String,
     pub done: bool,
+    #[serde(rename = "toolCalls")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ToolCall {
+    #[serde(rename = "toolId")]
+    pub tool_id: String,
+    #[serde(rename = "toolName")]
+    pub tool_name: String,
+    #[serde(rename = "toolInput")]
+    pub tool_input: serde_json::Value,
 }

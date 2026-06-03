@@ -1,105 +1,16 @@
 <script setup lang="ts">
-import { h, ref, computed, watch } from 'vue'
+import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { NDropdown } from 'naive-ui'
 import { useProjectStore } from '@/stores/project'
-import { useSessionStore } from '@/stores/session'
-import { useAgentStore } from '@/stores/agent'
-import FileTree from '@/components/common/FileTree.vue'
 
 const router = useRouter()
 const route = useRoute()
 const projectStore = useProjectStore()
-const sessionStore = useSessionStore()
-const agentStore = useAgentStore()
 
 const projectId = computed(() => route.params.projectId as string | undefined)
 const project = computed(() =>
   projectId.value ? projectStore.projects.find((p) => p.id === projectId.value) : null
 )
-
-const fileTreeExpanded = ref(false)
-const contextMenuSessionId = ref<string | null>(null)
-const contextMenuX = ref(0)
-const contextMenuY = ref(0)
-const showContextMenu = ref(false)
-
-// Sessions for current project
-const projectSessions = computed(() => {
-  if (!projectId.value) return []
-  return [...sessionStore.sessions]
-    .filter((s) => s.taskId === projectId.value)
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-})
-
-function getProviderName(providerId: string): string {
-  return agentStore.providers.find((p) => p.id === providerId)?.name ?? 'AI'
-}
-
-function getSummary(session: any): string {
-  const msgs = sessionStore.messages.filter((m) => m.sessionId === session.id)
-  const firstUser = msgs.find((m) => m.type === 'user')
-  if (firstUser) {
-    return firstUser.content.length > 40 ? firstUser.content.slice(0, 40) + '...' : firstUser.content
-  }
-  return `会话 ${session.id.slice(0, 8)}`
-}
-
-function formatTime(dateStr: string): string {
-  const d = new Date(dateStr)
-  const now = new Date()
-  const diffMs = now.getTime() - d.getTime()
-  const diffMins = Math.floor(diffMs / 60000)
-  if (diffMins < 1) return '刚刚'
-  if (diffMins < 60) return `${diffMins}分钟前`
-  const diffHours = Math.floor(diffMins / 60)
-  if (diffHours < 24) return `${diffHours}小时前`
-  return `${d.getMonth() + 1}/${d.getDate()}`
-}
-
-// Context menu for sessions
-function getSessionContextMenuOptions() {
-  return [
-    { label: '复制 ID', key: 'copy' },
-    { label: '重命名', key: 'rename' },
-    { label: '导出 Markdown', key: 'export' },
-    { type: 'divider', key: 'd1' },
-    { label: '删除', key: 'delete' },
-  ]
-}
-
-function openSessionContextMenu(e: MouseEvent, sessionId: string) {
-  e.preventDefault()
-  contextMenuSessionId.value = sessionId
-  contextMenuX.value = e.clientX
-  contextMenuY.value = e.clientY
-  showContextMenu.value = true
-}
-
-function handleSessionContextMenu(key: string) {
-  const sessionId = contextMenuSessionId.value
-  if (!sessionId) return
-  switch (key) {
-    case 'copy':
-      navigator.clipboard.writeText(sessionId)
-      break
-    case 'delete':
-      sessionStore.deleteSession(sessionId)
-      if (route.name === 'project-session' && route.params.sessionId === sessionId) {
-        router.push(`/project/${projectId.value}`)
-      }
-      break
-  }
-  showContextMenu.value = false
-}
-
-function goToSession(sessionId: string) {
-  router.push(`/project/${projectId.value}/chat/${sessionId}`)
-}
-
-function goToNewChat() {
-  router.push(`/project/${projectId.value}/chat`)
-}
 
 const navItems = computed(() => {
   if (!project.value) return []
@@ -149,59 +60,6 @@ function isActiveNav(key: string): boolean {
         </div>
       </div>
 
-      <!-- Session history -->
-      <div v-if="project && projectSessions.length > 0" class="sidebar-section">
-        <div class="section-header">
-          <span class="section-label">历史会话</span>
-          <button class="section-action" @click="goToNewChat" title="新建对话">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M7 2v10M2 7h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-          </button>
-        </div>
-
-        <div
-          v-for="s in projectSessions"
-          :key="s.id"
-          class="session-item"
-          :class="{ active: route.params.sessionId === s.id }"
-          @click="goToSession(s.id)"
-          @contextmenu="openSessionContextMenu($event, s.id)"
-        >
-          <div class="session-summary">{{ getSummary(s) }}</div>
-          <div class="session-meta">
-            <span class="session-provider">{{ getProviderName(s.providerId) }}</span>
-            <span class="session-time">{{ formatTime(s.updatedAt) }}</span>
-          </div>
-        </div>
-
-        <NDropdown
-          :show="showContextMenu"
-          trigger="manual"
-          :x="contextMenuX"
-          :y="contextMenuY"
-          :options="getSessionContextMenuOptions()"
-          @select="handleSessionContextMenu"
-          @clickoutside="showContextMenu = false"
-        />
-      </div>
-
-      <!-- File tree -->
-      <div v-if="project" class="sidebar-section">
-        <div
-          class="section-header clickable"
-          @click="fileTreeExpanded = !fileTreeExpanded"
-        >
-          <span class="section-label">
-            <span class="expand-icon">{{ fileTreeExpanded ? '▼' : '▶' }}</span>
-            文件
-          </span>
-        </div>
-        <div v-if="fileTreeExpanded" class="file-tree-wrapper">
-          <FileTree :root-path="project.path" />
-        </div>
-      </div>
-
       <!-- No project selected -->
       <div v-if="!project" class="sidebar-section">
         <div class="nav-item" @click="router.push('/')">
@@ -239,19 +97,19 @@ function isActiveNav(key: string): boolean {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--bg-primary);
+  background: var(--bg-surface);
   color: var(--text-primary);
 }
 
 .sidebar-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 14px;
+  gap: 10px;
+  padding: 16px;
   cursor: pointer;
   flex-shrink: 0;
   transition: background var(--transition-fast);
-  border-bottom: 0.5px solid var(--border-color);
+  border-bottom: 1px solid var(--border-default);
 
   &:hover {
     background: var(--bg-hover);
@@ -262,17 +120,17 @@ function isActiveNav(key: string): boolean {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  background: var(--primary);
   color: #fff;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 700;
 }
 
 .app-name {
-  font-size: 14px;
+  font-size: var(--text-md);
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -287,79 +145,40 @@ function isActiveNav(key: string): boolean {
   padding: 8px 0;
 
   &.global-section {
-    border-top: 0.5px solid var(--border-color);
+    border-top: 1px solid var(--border-default);
     margin-top: auto;
     padding-top: 8px;
   }
 }
 
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 14px;
-
-  &.clickable {
-    cursor: pointer;
-    user-select: none;
-
-    &:hover {
-      background: var(--bg-hover);
-    }
-  }
-}
-
 .section-label {
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-tertiary);
-  padding: 4px 14px;
+  padding: 8px 16px 4px;
   display: flex;
   align-items: center;
-  gap: 4px;
-}
-
-.section-action {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border: none;
-  background: transparent;
-  color: var(--text-tertiary);
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-
-  &:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-  }
-}
-
-.expand-icon {
-  font-size: 9px;
-  width: 10px;
-  display: inline-block;
+  gap: 6px;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
+  gap: 10px;
+  padding: 8px 16px;
   cursor: pointer;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--text-base);
   transition: all var(--transition-fast);
-  border-radius: 6px;
-  margin: 0 6px;
+  border-radius: var(--radius-md);
+  margin: 2px 8px;
 
   svg {
     flex-shrink: 0;
+    width: 16px;
+    height: 16px;
   }
 
   &:hover {
@@ -368,65 +187,9 @@ function isActiveNav(key: string): boolean {
   }
 
   &.active {
-    background: rgba(10, 132, 255, 0.15);
-    color: var(--text-primary);
-
-    svg {
-      color: var(--accent-blue);
-    }
+    background: var(--primary-light);
+    color: var(--primary);
+    font-weight: 500;
   }
-}
-
-// ─── Session items ───
-.session-item {
-  padding: 8px 14px;
-  cursor: pointer;
-  transition: background var(--transition-fast);
-  border-left: 2px solid transparent;
-  margin: 0 6px;
-  border-radius: 6px;
-
-  &:hover {
-    background: var(--bg-hover);
-  }
-
-  &.active {
-    background: rgba(10, 132, 255, 0.1);
-    border-left-color: var(--accent-blue);
-  }
-}
-
-.session-summary {
-  font-size: 13px;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.4;
-}
-
-.session-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 2px;
-}
-
-.session-provider {
-  font-size: 11px;
-  color: var(--accent-teal);
-  font-weight: 500;
-}
-
-.session-time {
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-// ─── File tree ───
-.file-tree-wrapper {
-  max-height: 400px;
-  overflow-y: auto;
-  padding: 4px 0;
 }
 </style>

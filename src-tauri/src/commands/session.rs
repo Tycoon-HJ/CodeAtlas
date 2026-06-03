@@ -65,3 +65,16 @@ pub fn delete_session(app: AppHandle, id: String) -> bool {
         false
     }
 }
+
+#[tauri::command]
+pub fn update_session_title(app: AppHandle, id: String, title: String) -> bool {
+    let mut sessions: Vec<Session> = load_vec(&app, STORE_KEY);
+    if let Some(session) = sessions.iter_mut().find(|s| s.id == id) {
+        session.title = Some(title);
+        session.updated_at = chrono_now();
+        save_vec(&app, STORE_KEY, &sessions);
+        true
+    } else {
+        false
+    }
+}

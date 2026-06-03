@@ -6,12 +6,10 @@ import { useProjectStore } from '@/stores/project'
 
 defineProps<{
   showMenuToggle?: boolean
-  terminalVisible?: boolean
 }>()
 
 const emit = defineEmits<{
   toggleMenu: []
-  toggleTerminal: []
 }>()
 
 const route = useRoute()
@@ -61,11 +59,6 @@ const breadcrumbs = computed(() => {
     </div>
 
     <div class="navbar-right">
-      <button class="icon-btn" @click="emit('toggleTerminal')" :title="terminalVisible ? '隐藏终端' : '显示终端'">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <path d="M2 4l4 4-4 4M8 12h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
       <button class="icon-btn" @click="router.push('/')" title="项目列表">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
           <path d="M2 3h5l1 1h5a1 1 0 011 1v8a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/>
@@ -81,16 +74,16 @@ const breadcrumbs = computed(() => {
   align-items: center;
   justify-content: space-between;
   height: var(--topbar-height);
-  padding: 0 12px;
-  background: var(--bg-secondary);
-  border-bottom: 0.5px solid var(--border-color);
+  padding: 0 16px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-default);
   flex-shrink: 0;
 }
 
 .navbar-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   flex-shrink: 0;
 }
 
@@ -105,12 +98,12 @@ const breadcrumbs = computed(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: all var(--transition-fast);
 
@@ -122,7 +115,7 @@ const breadcrumbs = computed(() => {
 
 @media (max-width: 767px) {
   .navbar-left {
-    gap: 4px;
+    gap: 8px;
   }
 }
 </style>

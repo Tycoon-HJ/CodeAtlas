@@ -39,15 +39,17 @@ function openProject(project: Project) {
 }
 
 function formatTime(dateStr: string): string {
-  const d = new Date(dateStr)
-  const now = new Date()
-  const diffMs = now.getTime() - d.getTime()
-  const diffMins = Math.floor(diffMs / 60000)
-  if (diffMins < 1) return '刚刚'
-  if (diffMins < 60) return `${diffMins}分钟前`
-  const diffHours = Math.floor(diffMins / 60)
-  if (diffHours < 24) return `${diffHours}小时前`
-  return `${d.getMonth() + 1}/${d.getDate()}`
+  if (!dateStr) return ''
+  // Handle both ISO string and millisecond timestamp
+  const d = /^\d+$/.test(dateStr) ? new Date(Number(dateStr)) : new Date(dateStr)
+  if (isNaN(d.getTime())) return ''
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hours = String(d.getHours()).padStart(2, '0')
+  const minutes = String(d.getMinutes()).padStart(2, '0')
+  const seconds = String(d.getSeconds()).padStart(2, '0')
+  return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`
 }
 
 async function handleOpenDirectory() {
@@ -126,7 +128,7 @@ async function handleDeleteProject(id: string) {
             <div class="project-info">
               <div class="project-name-row">
                 <span class="project-name">{{ project.name }}</span>
-                <NTag v-if="project.isFavorite" size="small" :bordered="false" style="background: rgba(255, 159, 10, 0.15); color: var(--accent-orange); font-size: 10px">收藏</NTag>
+                <NTag v-if="project.isFavorite" size="small" :bordered="false" style="background: var(--warning-light); color: var(--warning); font-size: 10px">收藏</NTag>
               </div>
               <div class="project-path">{{ project.path }}</div>
             </div>
@@ -191,7 +193,7 @@ async function handleDeleteProject(id: string) {
   width: 48px;
   height: 48px;
   border-radius: 14px;
-  background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+  background: linear-gradient(135deg, var(--primary), var(--accent-purple));
   color: #fff;
   font-size: 18px;
   font-weight: 800;
@@ -227,7 +229,7 @@ async function handleDeleteProject(id: string) {
   gap: 6px;
   padding: 9px 18px;
   border: none;
-  background: var(--accent-blue);
+  background: var(--primary);
   color: #fff;
   border-radius: 8px;
   font-size: 13px;
@@ -237,7 +239,7 @@ async function handleDeleteProject(id: string) {
   font-family: var(--font-sans);
 
   &:hover {
-    background: #409CFF;
+    background: var(--primary-hover);
     transform: translateY(-1px);
   }
 
@@ -268,7 +270,7 @@ async function handleDeleteProject(id: string) {
 .search-input {
   width: 100%;
   padding: 8px 12px 8px 34px;
-  border: 0.5px solid var(--border-color);
+  border: 0.5px solid var(--border-default);
   background: var(--bg-secondary);
   color: var(--text-primary);
   border-radius: 8px;
@@ -278,7 +280,7 @@ async function handleDeleteProject(id: string) {
   transition: border-color var(--transition-fast);
 
   &:focus {
-    border-color: var(--accent-blue);
+    border-color: var(--primary);
   }
 
   &::placeholder {
@@ -310,14 +312,14 @@ async function handleDeleteProject(id: string) {
 .project-card {
   padding: 14px 16px;
   background: var(--bg-secondary);
-  border: 0.5px solid var(--border-color);
+  border: 0.5px solid var(--border-default);
   border-radius: 10px;
   cursor: pointer;
   transition: all var(--transition-fast);
 
   &:hover {
     background: var(--bg-hover);
-    border-color: rgba(10, 132, 255, 0.3);
+    border-color: var(--primary-light);
     transform: translateY(-1px);
   }
 }
@@ -334,9 +336,9 @@ async function handleDeleteProject(id: string) {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(10, 132, 255, 0.1);
+  background: var(--primary-light);
   border-radius: 8px;
-  color: var(--accent-blue);
+  color: var(--primary);
   flex-shrink: 0;
 }
 
@@ -387,8 +389,8 @@ async function handleDeleteProject(id: string) {
   }
 
   &:hover {
-    background: rgba(255, 69, 58, 0.12);
-    color: var(--accent-red);
+    background: var(--error-light);
+    color: var(--error);
   }
 }
 
@@ -405,7 +407,7 @@ async function handleDeleteProject(id: string) {
   color: var(--accent-teal);
   font-family: var(--font-mono);
   padding: 1px 6px;
-  background: rgba(48, 209, 88, 0.1);
+  background: var(--success-light);
   border-radius: 4px;
 }
 

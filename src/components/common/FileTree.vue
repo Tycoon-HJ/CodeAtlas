@@ -221,7 +221,7 @@ watch(() => props.rootPath, () => loadRoot(), { immediate: true })
   text-overflow: ellipsis;
 
   &:hover {
-    background: rgba(0, 0, 0, 0.04);
+    background: var(--bg-hover);
   }
 
   &.child {
@@ -240,7 +240,7 @@ watch(() => props.rootPath, () => loadRoot(), { immediate: true })
 .expand-icon {
   width: 14px;
   font-size: 10px;
-  color: #999;
+  color: var(--text-tertiary);
   flex-shrink: 0;
   text-align: center;
 }

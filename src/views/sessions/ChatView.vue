@@ -2,24 +2,17 @@
 import { NText, NInput, NSelect, NScrollbar, NPopconfirm } from 'naive-ui'
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useSessionStore } from '@/stores/session'
 import PermissionDialog from '@/components/common/PermissionDialog.vue'
 import TrustPromptDialog from '@/components/common/TrustPromptDialog.vue'
-import FileTree from '@/components/common/FileTree.vue'
-import CodeEditor from '@/components/common/CodeEditor.vue'
-import TerminalPanel from '@/components/common/TerminalPanel.vue'
 import { useAgentStore } from '@/stores/agent'
 import { useProjectStore } from '@/stores/project'
 import { useSettingsStore } from '@/stores/settings'
-import { useEditorStore } from '@/stores/editor'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import * as api from '@/api'
 import type { Message } from '@/types'
-import { commandRegistry, parseCommand, type CommandContext, type CommandMeta } from '@/commands/registry'
-import '@/commands/handlers' // registers all handlers
 
 const props = defineProps<{ projectId: string; sessionId?: string }>()
 const router = useRouter()
@@ -27,20 +20,12 @@ const sessionStore = useSessionStore()
 const agentStore = useAgentStore()
 const projectStore = useProjectStore()
 const settingsStore = useSettingsStore()
-const editorStore = useEditorStore()
 const inputMessage = ref('')
 const activeSession = ref<any>(null)
 const scrollRef = ref<InstanceType<typeof NScrollbar> | null>(null)
 const commandHistory = ref<string[]>([])
 const historyIndex = ref<number>(-1)
-const showCommandSuggestions = ref(false)
-const commandSuggestions = ref<CommandMeta[]>([])
-const selectedSuggestionIndex = ref(0)
 const showLeftPanel = ref(false)
-const showRightPanel = ref(true)
-const rightPanelTab = ref<'tree' | 'editor'>('tree')
-const showTerminal = ref(false)
-const terminalLines = ref<string[]>([])
 
 // Configure marked with highlight.js
 marked.setOptions({
@@ -61,54 +46,67 @@ const providerOptions = computed(() =>
 )
 
 const selectedProvider = ref(agentStore.currentProvider?.id ?? 'claude')
+const isInitializing = ref(false) // Flag to prevent provider watch during init
 
-let unlistenStderr: UnlistenFn | null = null
-let unlistenOutput: UnlistenFn | null = null
+const currentProviderInfo = computed(() => {
+  const provider = agentStore.providers.find((p) => p.id === selectedProvider.value)
+  return provider || { id: 'claude', name: 'Claude Code', type: 'claude' }
+})
+
+const providerDisplayName = computed(() => currentProviderInfo.value.name)
+
+const providerAvatarText = computed(() => {
+  const name = currentProviderInfo.value.name
+  // Get first 2 characters or initials
+  if (name.includes(' ')) {
+    return name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()
+  }
+  return name.slice(0, 2).toUpperCase()
+})
 
 onMounted(async () => {
   await projectStore.fetchProjects()
   await sessionStore.fetchSessions()
   await initializeActiveSession()
-  editorStore.initFileChangeListener()
-
-  // Start file watcher for the project
-  if (project.value?.path) {
-    api.startFileWatcher(project.value.path).catch(console.error)
-  }
-
-  unlistenStderr = await listen('claude-stderr', (event: any) => {
-    if (event.payload?.message) {
-      terminalLines.value.push(`[stderr] ${event.payload.message}`)
-    }
-  })
-
-  unlistenOutput = await listen('claude-output', (event: any) => {
-    if (event.payload?.content && !event.payload.done) {
-      terminalLines.value.push(event.payload.content)
-    }
-  })
 })
 
 onBeforeUnmount(() => {
-  unlistenStderr?.()
-  unlistenOutput?.()
-  api.stopFileWatcher().catch(console.error)
+  // Cleanup if needed
 })
 
 const project = computed(() =>
   projectStore.projects.find((p) => p.id === props.projectId)
 )
 
+// Watch for provider changes and create new session
+watch(selectedProvider, async (newProviderId, oldProviderId) => {
+  // Skip if initializing (setting provider from existing session)
+  if (isInitializing.value) return
+  if (newProviderId !== oldProviderId && activeSession.value) {
+    // Create a new session with the new provider
+    const newSession = await sessionStore.createSession(props.projectId, newProviderId)
+    const proj = project.value
+    if (proj) {
+      sessionStore.initSessionContext(newSession.id, props.projectId, proj.name, proj.path)
+    }
+    // Navigate to the new session
+    router.push(`/project/${props.projectId}/chat/${newSession.id}`)
+  }
+})
+
 // Reinitialize when navigating to a different session
-watch(() => props.sessionId, async (newId) => {
-  if (newId && newId !== activeSession.value?.id) {
+watch(() => props.sessionId, async (newId, oldId) => {
+  if (newId && newId !== oldId) {
     await initializeActiveSession()
   }
 })
 
-const sessionMessages = computed(() =>
-  activeSession.value ? sessionStore.messages.filter((m) => m.sessionId === activeSession.value.id) : []
-)
+const sessionMessages = computed(() => {
+  if (!activeSession.value) return []
+  const filtered = sessionStore.messages.filter((m) => m.sessionId === activeSession.value.id)
+  console.log(`[ChatView] sessionMessages for ${activeSession.value.id}:`, filtered.length, 'of', sessionStore.messages.length, 'total')
+  return filtered
+})
 
 const sending = computed(() =>
   activeSession.value ? sessionStore.isPending(activeSession.value.id) : false
@@ -173,49 +171,6 @@ async function handleDeleteSession() {
   router.push(`/project/${props.projectId}`)
 }
 
-function goToNewChat() {
-  router.push(`/project/${props.projectId}/chat`)
-}
-
-// ─── Command suggestion filtering ───
-
-function updateSuggestions() {
-  const input = inputMessage.value
-  if (input.startsWith('/')) {
-    const parsed = parseCommand(input)
-    const query = parsed ? parsed.name.substring(1) : input.substring(1)
-    const all = commandRegistry.getMetaList()
-    const filtered = query.length === 0
-      ? all
-      : all.filter(
-          (cmd) =>
-            cmd.name.toLowerCase().includes(query.toLowerCase()) ||
-            cmd.description.toLowerCase().includes(query.toLowerCase())
-        )
-    commandSuggestions.value = filtered
-    showCommandSuggestions.value = filtered.length > 0
-    selectedSuggestionIndex.value = 0
-  } else {
-    showCommandSuggestions.value = false
-    commandSuggestions.value = []
-  }
-}
-
-watch(inputMessage, updateSuggestions)
-
-// ─── Build command context ───
-
-function buildCommandContext(): CommandContext {
-  return {
-    sessionId: activeSession.value?.id ?? '',
-    workingDir: sessionContext.value?.workingDirectory ?? project.value?.path ?? '',
-    claudePath: settingsStore.settings.claudePath,
-    claudeConfigPath: settingsStore.settings.claudeConfigPath,
-    messageCount: sessionMessages.value.length,
-    projectName: sessionContext.value?.projectName ?? project.value?.name ?? '',
-  }
-}
-
 // ─── Session initialization ───
 
 async function initializeActiveSession() {
@@ -225,27 +180,38 @@ async function initializeActiveSession() {
     return
   }
 
+  // Set flag to prevent provider watch from firing
+  isInitializing.value = true
+
+  // Always fetch latest sessions first
+  await sessionStore.fetchSessions()
+
   let session
   if (props.sessionId) {
+    // Try to find existing session
     session = sessionStore.sessions.find((s) => s.id === props.sessionId)
-    if (!session) {
-      await sessionStore.fetchSessions()
-      session = sessionStore.sessions.find((s) => s.id === props.sessionId)
-    }
-    if (!session) {
-      console.error('Session not found:', props.sessionId)
-      session = await sessionStore.createSession(props.projectId, selectedProvider.value)
-    } else {
+    if (session) {
       selectedProvider.value = session.providerId
+    } else {
+      // Session not found — create new temporary session
+      console.warn('Session not found, creating new:', props.sessionId)
+      session = await sessionStore.createSession(props.projectId, selectedProvider.value, false)
+      // Navigate to the new session URL so the URL matches the actual session
+      router.replace(`/project/${props.projectId}/chat/${session.id}`)
     }
   } else {
-    session = await sessionStore.createSession(props.projectId, selectedProvider.value)
+    // Create temporary session (not saved to backend until first message)
+    session = await sessionStore.createSession(props.projectId, selectedProvider.value, false)
   }
 
   activeSession.value = session
   sessionStore.setCurrentSession(session)
   sessionStore.initSessionContext(session.id, props.projectId, proj.name, proj.path)
   await sessionStore.fetchMessages(session.id)
+  console.log('[ChatView] Initialized session:', session.id, 'messages:', sessionStore.messages.length)
+
+  // Reset flag
+  isInitializing.value = false
 }
 
 function scrollToBottom() {
@@ -263,38 +229,6 @@ function handleKeydown(event: KeyboardEvent) {
     event.preventDefault()
     handleSend()
     return
-  }
-
-  if (showCommandSuggestions.value && commandSuggestions.value.length > 0) {
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      selectedSuggestionIndex.value =
-        selectedSuggestionIndex.value > 0
-          ? selectedSuggestionIndex.value - 1
-          : commandSuggestions.value.length - 1
-      scrollToSelectedSuggestion()
-      return
-    } else if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      selectedSuggestionIndex.value =
-        selectedSuggestionIndex.value < commandSuggestions.value.length - 1
-          ? selectedSuggestionIndex.value + 1
-          : 0
-      scrollToSelectedSuggestion()
-      return
-    } else if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey) {
-      event.preventDefault()
-      selectCommand(commandSuggestions.value[selectedSuggestionIndex.value])
-      return
-    } else if (event.key === 'Escape') {
-      event.preventDefault()
-      showCommandSuggestions.value = false
-      return
-    } else if (event.key === 'Tab') {
-      event.preventDefault()
-      selectCommand(commandSuggestions.value[selectedSuggestionIndex.value])
-      return
-    }
   }
 
   // Command history navigation
@@ -316,26 +250,7 @@ function handleKeydown(event: KeyboardEvent) {
   }
 }
 
-function scrollToSelectedSuggestion() {
-  nextTick(() => {
-    const list = document.querySelector('.suggestions-list')
-    const item = list?.querySelector('.suggestion-item.active')
-    if (item) {
-      item.scrollIntoView({ block: 'nearest' })
-    }
-  })
-}
-
-function selectCommand(command: CommandMeta) {
-  inputMessage.value = command.name + ' '
-  showCommandSuggestions.value = false
-  nextTick(() => {
-    const input = document.querySelector('.input-editor input, .input-editor textarea') as HTMLElement
-    input?.focus()
-  })
-}
-
-// ─── Send message / execute command ───
+// ─── Send message ───
 
 async function handleSend() {
   if (!inputMessage.value.trim() || sending.value || !activeSession.value) return
@@ -344,102 +259,55 @@ async function handleSend() {
   commandHistory.value.unshift(content)
   historyIndex.value = -1
   inputMessage.value = ''
-  showCommandSuggestions.value = false
 
-  // Check if it's a slash command
-  const parsed = parseCommand(content)
-  if (parsed) {
-    const def = commandRegistry.get(parsed.name)
-    if (def) {
-      // Add user message showing the command
-      const userMsg: Message = {
-        id: crypto.randomUUID(),
-        sessionId: activeSession.value.id,
-        type: 'user',
-        content,
-        createdAt: new Date().toISOString(),
-      }
-      await sessionStore.addMessage(userMsg)
-      scrollToBottom()
-
-      // Execute command via registry
-      const ctx = buildCommandContext()
-      const result = await commandRegistry.execute(content, ctx)
-
-      if (!result) return
-
-      if (result.type === 'silent') {
-        // No output (e.g., /clear)
-        scrollToBottom()
-        return
-      }
-
-      if (result.type === 'claude' && result.prompt) {
-        // Send the translated prompt to Claude
-        try {
-          sessionStore.markPending(activeSession.value.id)
-          await api.sendToClaude(
-            activeSession.value.id,
-            result.prompt,
-            ctx.workingDir,
-            ctx.claudePath,
-            ctx.claudeConfigPath
-          )
-        } catch (e: any) {
-          sessionStore.clearPending(activeSession.value.id)
-          const errMsg: Message = {
-            id: crypto.randomUUID(),
-            sessionId: activeSession.value.id,
-            type: 'system',
-            content: '发送失败: ' + (e?.message ?? String(e)),
-            createdAt: new Date().toISOString(),
-          }
-          await sessionStore.addMessage(errMsg)
-        }
-        return
-      }
-
-      // type === 'text' or 'error' — render locally
-      const resultMsg: Message = {
-        id: crypto.randomUUID(),
-        sessionId: activeSession.value.id,
-        type: result.type === 'error' ? 'system' : 'assistant',
-        content: result.content,
-        createdAt: new Date().toISOString(),
-      }
-      await sessionStore.addMessage(resultMsg)
-      scrollToBottom()
-      return
+  // Save session to backend on first message
+  const session = activeSession.value
+  if (session) {
+    // Check if this session has any messages
+    const existingMessages = sessionStore.messages.filter(m => m.sessionId === session.id)
+    if (existingMessages.length === 0) {
+      // This is a new session that hasn't been saved yet
+      await sessionStore.saveSessionToBackend(session)
     }
   }
 
-  // Not a slash command — send to Claude normally
   const userMsg: Message = {
     id: crypto.randomUUID(),
-    sessionId: activeSession.value.id,
+    sessionId: session.id,
     type: 'user',
     content,
     createdAt: new Date().toISOString(),
   }
-  await sessionStore.addMessage(userMsg)
+  sessionStore.addMessage(userMsg)
   scrollToBottom()
 
   try {
-    sessionStore.markPending(activeSession.value.id)
+    sessionStore.markPending(session.id)
+    // Set session title from first user message
+    if (!session.title) {
+      const titlePreview = content.length > 50 ? content.slice(0, 50) + '...' : content
+      try {
+        await sessionStore.updateSessionTitle(session.id, titlePreview)
+      } catch (titleErr) {
+        console.warn('Failed to update session title:', titleErr)
+      }
+    }
     const workingDir = sessionContext.value?.workingDirectory ?? project.value?.path ?? ''
-    const claudePath = settingsStore.settings.claudePath
-    const claudeConfigPath = settingsStore.settings.claudeConfigPath
-    await api.sendToClaude(activeSession.value.id, content, workingDir, claudePath, claudeConfigPath)
+    const providerId = selectedProvider.value
+    // Use provider-specific paths
+    const providerPath = providerId === 'codex' ? settingsStore.settings.codexPath : settingsStore.settings.claudePath
+    const providerConfigPath = providerId === 'codex' ? settingsStore.settings.codexConfigPath : settingsStore.settings.claudeConfigPath
+    await api.sendMessage(providerId, session.id, content, workingDir, providerPath, providerConfigPath)
   } catch (e: any) {
-    sessionStore.clearPending(activeSession.value.id)
+    sessionStore.clearPending(session.id)
     const errMsg: Message = {
       id: crypto.randomUUID(),
-      sessionId: activeSession.value.id,
+      sessionId: session.id,
       type: 'system',
       content: '发送失败: ' + (e?.message ?? String(e)),
       createdAt: new Date().toISOString(),
     }
-    await sessionStore.addMessage(errMsg)
+    sessionStore.addMessage(errMsg)
   }
 }
 
@@ -464,31 +332,41 @@ function formatToolInput(input: Record<string, unknown>): string {
   return JSON.stringify(input, null, 2)
 }
 
+function formatDateTime(isoStr: string): string {
+  const d = new Date(isoStr)
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hours = String(d.getHours()).padStart(2, '0')
+  const minutes = String(d.getMinutes()).padStart(2, '0')
+  const seconds = String(d.getSeconds()).padStart(2, '0')
+  return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`
+}
+
 // ─── Three-panel helpers ───
 
 const projectSessions = computed(() =>
-  sessionStore.sessions.filter((s) => s.taskId === props.projectId)
+  sessionStore.sessions
+    .filter((s) => s.taskId === props.projectId)
+    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
 )
 
 function goToSession(sessionId: string) {
   router.push(`/project/${props.projectId}/chat/${sessionId}`)
 }
 
-function handleFileClick(path: string) {
-  editorStore.openFile(path)
-  rightPanelTab.value = 'editor'
-}
-
-function formatTime(iso: string): string {
-  const d = new Date(iso)
-  const now = new Date()
-  const diffMs = now.getTime() - d.getTime()
-  const diffMin = Math.floor(diffMs / 60000)
-  if (diffMin < 1) return '刚刚'
-  if (diffMin < 60) return `${diffMin}分钟前`
-  const diffH = Math.floor(diffMin / 60)
-  if (diffH < 24) return `${diffH}小时前`
-  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
+function formatTime(dateStr: string): string {
+  if (!dateStr) return ''
+  // Handle both ISO string and millisecond timestamp
+  const d = /^\d+$/.test(dateStr) ? new Date(Number(dateStr)) : new Date(dateStr)
+  if (isNaN(d.getTime())) return ''
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const hours = String(d.getHours()).padStart(2, '0')
+  const minutes = String(d.getMinutes()).padStart(2, '0')
+  const seconds = String(d.getSeconds()).padStart(2, '0')
+  return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`
 }
 </script>
 
@@ -546,21 +424,6 @@ function formatTime(iso: string): string {
           </div>
           <div class="header-controls">
             <NSelect v-model:value="selectedProvider" :options="providerOptions" size="small" style="width: 140px" />
-            <button class="icon-btn" @click="goToNewChat" title="新建对话">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-              </svg>
-            </button>
-            <button class="icon-btn" @click="showRightPanel = !showRightPanel" title="文件树">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M2 3h5l1 1h5a1 1 0 011 1v8a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/>
-              </svg>
-            </button>
-            <button class="icon-btn" :class="{ active: showTerminal }" @click="showTerminal = !showTerminal" title="终端">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M2 4l5 4-5 4M9 12h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
             <NPopconfirm @positive-click="handleDeleteSession">
               <template #trigger>
                 <button class="icon-btn danger" title="删除会话">
@@ -597,37 +460,66 @@ function formatTime(iso: string): string {
                 <circle cx="30" cy="26" r="2" fill="currentColor" opacity="0.3"/>
               </svg>
             </div>
-            <NText depth="3" style="font-size: 14px">开始与 Claude 对话</NText>
-            <NText depth="3" style="font-size: 12px; margin-top: 4px">输入 / 查看可用命令</NText>
+            <NText depth="3" style="font-size: 14px">开始与 {{ providerDisplayName }} 对话</NText>
+            <NText depth="3" style="font-size: 12px; margin-top: 4px">输入消息开始聊天</NText>
           </div>
 
           <!-- 消息列表 -->
-          <div v-for="msg in sessionMessages" :key="msg.id" class="message-row" :class="msg.type">
-            <div v-if="msg.type !== 'user'" class="avatar-col">
-              <div class="avatar ai">AI</div>
+          <template v-for="msg in sessionMessages" :key="msg.id">
+            <!-- System/Error messages -->
+            <div v-if="msg.type === 'system'" class="message-row system">
+              <div class="bubble system">
+                <div class="bubble-content">
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style="display: inline-block; vertical-align: -2px; margin-right: 6px">
+                    <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.2"/>
+                    <path d="M8 4v5M8 11v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                  </svg>
+                  {{ msg.content }}
+                </div>
+                <div class="bubble-time">{{ formatDateTime(msg.createdAt) }}</div>
+              </div>
             </div>
-            <div class="bubble" :class="msg.type">
-              <details v-if="msg.type === 'assistant' && msg.thinking" class="thinking-block">
-                <summary class="thinking-label">思考过程</summary>
-                <div class="thinking-content markdown-body" v-html="renderMarkdown(msg.thinking)" />
-              </details>
-              <div
-                v-if="msg.type === 'assistant'"
-                class="bubble-content markdown-body"
-                v-html="renderMarkdown(msg.content)"
-              />
-              <div v-else class="bubble-content" v-html="renderPlain(msg.content)" />
-              <div class="bubble-time">{{ msg.createdAt.slice(11, 16) }}</div>
+            <!-- User messages -->
+            <div v-else-if="msg.type === 'user'" class="message-row user">
+              <div class="bubble user">
+                <div class="bubble-content" v-html="renderPlain(msg.content)" />
+                <div class="bubble-time">{{ formatDateTime(msg.createdAt) }}</div>
+              </div>
+              <div class="avatar-col">
+                <div class="avatar user">U</div>
+              </div>
             </div>
-            <div v-if="msg.type === 'user'" class="avatar-col">
-              <div class="avatar user">U</div>
+            <!-- Assistant messages -->
+            <div v-else class="message-row assistant">
+              <div class="avatar-col">
+                <div class="avatar ai">{{ providerAvatarText }}</div>
+              </div>
+              <div class="bubble assistant">
+                <details v-if="msg.thinking" class="thinking-block">
+                  <summary class="thinking-label">思考过程</summary>
+                  <div class="thinking-content markdown-body" v-html="renderMarkdown(msg.thinking)" />
+                </details>
+                <div v-if="msg.metadata?.toolCalls && msg.metadata.toolCalls.length > 0" class="tool-calls-log">
+                  <div v-for="(tc, idx) in msg.metadata.toolCalls" :key="idx" class="tool-call-item">
+                    <span class="tool-icon">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                        <path d="M8 2v4l3 3M8 2a6 6 0 100 12 6 6 0 000-12z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                      </svg>
+                    </span>
+                    <span class="tool-name">{{ tc.toolName }}</span>
+                    <span v-if="formatToolInput(tc.toolInput)" class="tool-args">{{ formatToolInput(tc.toolInput) }}</span>
+                  </div>
+                </div>
+                <div class="bubble-content markdown-body" v-html="renderMarkdown(msg.content)" />
+                <div class="bubble-time">{{ formatDateTime(msg.createdAt) }}</div>
+              </div>
             </div>
-          </div>
+          </template>
 
           <!-- 流式响应 -->
           <div v-if="sending" class="message-row assistant">
             <div class="avatar-col">
-              <div class="avatar ai">AI</div>
+              <div class="avatar ai">{{ providerAvatarText }}</div>
             </div>
             <div class="bubble assistant">
               <div v-if="streamThinking" class="thinking-block streaming">
@@ -648,8 +540,9 @@ function formatTime(iso: string): string {
               <div v-if="streamContent" class="bubble-content markdown-body streaming-text">
                 <span v-html="renderMarkdown(streamContent)" /><span class="cursor"></span>
               </div>
-              <div v-if="!streamThinking && !streamContent && currentToolCalls.length === 0" class="bubble-content typing">
-                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <div v-if="!streamThinking && !streamContent && currentToolCalls.length === 0" class="loading-indicator">
+                <div class="loading-spinner-small"></div>
+                <span class="loading-text">{{ providerDisplayName }} 思考中...</span>
               </div>
               <div class="abort-area">
                 <button class="abort-btn" @click="handleAbort">
@@ -669,37 +562,13 @@ function formatTime(iso: string): string {
             <NInput
               v-model:value="inputMessage"
               type="textarea"
-              placeholder="输入消息... (Ctrl+Enter 发送，/ 查看命令)"
+              placeholder="输入消息... (Ctrl+Enter 发送)"
               :rows="1"
               :autosize="{ minRows: 1, maxRows: 6 }"
               :disabled="sending"
               @keydown="handleKeydown"
               class="input-editor"
             />
-
-            <!-- 命令补全建议 -->
-            <div v-if="showCommandSuggestions && commandSuggestions.length > 0" class="command-suggestions">
-              <div class="suggestions-header">
-                <span>斜杠命令</span>
-                <span class="suggestions-count">{{ commandSuggestions.length }}</span>
-              </div>
-              <div class="suggestions-list">
-                <div
-                  v-for="(cmd, i) in commandSuggestions"
-                  :key="cmd.name"
-                  class="suggestion-item"
-                  :class="{ active: i === selectedSuggestionIndex }"
-                  @click="selectCommand(cmd)"
-                  @mouseenter="selectedSuggestionIndex = i"
-                >
-                  <div class="suggestion-main">
-                    <span class="suggestion-name">{{ cmd.icon }} {{ cmd.name }}</span>
-                    <span class="suggestion-usage">{{ cmd.usage }}</span>
-                  </div>
-                  <span class="suggestion-desc">{{ cmd.description }}</span>
-                </div>
-              </div>
-            </div>
           </div>
           <button
             class="send-btn"
@@ -710,92 +579,6 @@ function formatTime(iso: string): string {
               <path d="M2 8l12-5-5 12-2-5-5-2z" fill="currentColor"/>
             </svg>
           </button>
-        </div>
-
-        <!-- 终端面板 -->
-        <div v-if="showTerminal" class="terminal-area">
-          <div class="terminal-header">
-            <span class="terminal-title">终端输出</span>
-            <div class="terminal-header-actions">
-              <button class="icon-btn" @click="terminalLines = []" title="清空">
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                  <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                </svg>
-              </button>
-              <button class="icon-btn" @click="showTerminal = false" title="关闭">
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                  <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-                </svg>
-              </button>
-            </div>
-          </div>
-          <TerminalPanel :lines="terminalLines" :active="showTerminal" />
-        </div>
-      </div>
-
-      <!-- 右侧面板：文件树 + 编辑器 -->
-      <div v-if="showRightPanel" class="side-panel right-panel">
-        <div class="panel-header">
-          <div class="panel-tabs">
-            <button
-              class="panel-tab"
-              :class="{ active: rightPanelTab === 'tree' }"
-              @click="rightPanelTab = 'tree'"
-            >文件</button>
-            <button
-              class="panel-tab"
-              :class="{ active: rightPanelTab === 'editor' }"
-              @click="rightPanelTab = 'editor'"
-            >编辑器</button>
-          </div>
-          <button class="icon-btn" @click="showRightPanel = false" title="关闭">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-          </button>
-        </div>
-
-        <!-- 编辑器标签页 -->
-        <div v-if="editorStore.openFiles.length > 0" class="editor-tabs">
-          <div
-            v-for="f in editorStore.openFiles"
-            :key="f.path"
-            class="editor-tab"
-            :class="{ active: f.path === editorStore.activeFilePath }"
-            @click="editorStore.setActive(f.path); rightPanelTab = 'editor'"
-          >
-            <span class="tab-name">{{ f.name }}</span>
-            <span v-if="f.modified" class="tab-modified">●</span>
-            <button class="tab-close" @click.stop="editorStore.closeFile(f.path)" title="关闭">×</button>
-          </div>
-        </div>
-
-        <div class="panel-content panel-body">
-          <!-- 文件树 -->
-          <div v-show="rightPanelTab === 'tree'" class="tree-container">
-            <FileTree
-              v-if="project?.path"
-              :root-path="project.path"
-              @file-click="handleFileClick"
-            />
-            <div v-else class="empty-panel">
-              <NText depth="3" style="font-size: 12px">无项目路径</NText>
-            </div>
-          </div>
-
-          <!-- Monaco 编辑器 -->
-          <div v-show="rightPanelTab === 'editor'" class="editor-container">
-            <CodeEditor
-              v-if="editorStore.activeFile"
-              :content="editorStore.activeFile.content"
-              :language="editorStore.activeFile.language"
-              :read-only="false"
-              @update:content="editorStore.updateContent(editorStore.activeFilePath!, $event)"
-            />
-            <div v-else class="empty-panel">
-              <NText depth="3" style="font-size: 12px">点击文件树中的文件打开编辑器</NText>
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -823,7 +606,9 @@ function formatTime(iso: string): string {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--bg-primary);
+  background: var(--bg-surface);
+  font-family: var(--font-sans);
+  color: var(--text-primary);
 }
 
 .chat-welcome {
@@ -834,6 +619,7 @@ function formatTime(iso: string): string {
   justify-content: center;
   padding: 40px 20px;
   text-align: center;
+  background: var(--bg-surface);
 }
 
 .welcome-title {
@@ -843,17 +629,10 @@ function formatTime(iso: string): string {
   margin-bottom: 32px;
 
   .title-text {
-    font-size: 28px;
+    font-size: var(--text-2xl);
     font-weight: 700;
     color: var(--text-primary);
   }
-}
-
-.session-container {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  background: var(--bg-primary);
 }
 
 // ─── Three-panel layout ───
@@ -861,42 +640,40 @@ function formatTime(iso: string): string {
   display: flex;
   height: 100%;
   overflow: hidden;
+  background: var(--bg-surface);
 }
 
 .side-panel {
-  width: 260px;
-  min-width: 200px;
+  width: 280px;
+  min-width: 240px;
   display: flex;
   flex-direction: column;
   background: var(--bg-secondary);
-  border-right: 0.5px solid var(--border-color);
+  border-right: 1px solid var(--border-default);
   flex-shrink: 0;
-
-  &.right-panel {
-    border-right: none;
-    border-left: 0.5px solid var(--border-color);
-  }
 }
 
 .panel-header {
-  padding: 10px 12px;
-  border-bottom: 0.5px solid var(--border-color);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-default);
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
 
   .panel-title {
-    font-size: 13px;
+    font-size: var(--text-sm);
     font-weight: 600;
     color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
 }
 
 .panel-content {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 0;
+  padding: 8px 0;
 }
 
 .center-panel {
@@ -905,34 +682,42 @@ function formatTime(iso: string): string {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--bg-primary);
+  background: var(--bg-surface);
 }
 
 .session-list-panel {
-  padding: 4px 8px;
+  padding: 8px;
+}
+
+.empty-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
 }
 
 .session-item {
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background var(--transition-fast);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 
   &:hover {
     background: var(--bg-hover);
   }
 
   &.active {
-    background: rgba(10, 132, 255, 0.12);
-    outline: 1px solid rgba(10, 132, 255, 0.3);
-    outline-offset: -1px;
+    background: var(--primary-light);
+    border-left: 2px solid var(--primary);
   }
 
   .session-item-title {
-    font-size: 13px;
+    font-size: var(--text-base);
     color: var(--text-primary);
     font-weight: 500;
     white-space: nowrap;
@@ -941,142 +726,25 @@ function formatTime(iso: string): string {
   }
 
   .session-item-time {
-    font-size: 11px;
+    font-size: var(--text-xs);
     color: var(--text-tertiary);
   }
-}
-
-.empty-panel {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px 12px;
-  color: var(--text-tertiary);
-}
-
-// ─── Panel tabs ───
-.panel-tabs {
-  display: flex;
-  gap: 2px;
-}
-
-.panel-tab {
-  padding: 3px 8px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 500;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-
-  &:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-  }
-
-  &.active {
-    background: rgba(10, 132, 255, 0.12);
-    color: var(--accent-blue);
-  }
-}
-
-// ─── Editor tabs ───
-.editor-tabs {
-  display: flex;
-  overflow-x: auto;
-  border-bottom: 0.5px solid var(--border-color);
-  flex-shrink: 0;
-  background: var(--bg-primary);
-
-  &::-webkit-scrollbar {
-    height: 0;
-  }
-}
-
-.editor-tab {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  border-right: 0.5px solid var(--border-color);
-  cursor: pointer;
-  white-space: nowrap;
-  flex-shrink: 0;
-  transition: all var(--transition-fast);
-
-  &:hover {
-    background: var(--bg-hover);
-  }
-
-  &.active {
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    border-bottom: 2px solid var(--accent-blue);
-  }
-
-  .tab-name {
-    max-width: 100px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .tab-modified {
-    color: var(--accent-orange);
-    font-size: 10px;
-  }
-
-  .tab-close {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px;
-    height: 16px;
-    border: none;
-    background: transparent;
-    color: var(--text-tertiary);
-    border-radius: 3px;
-    cursor: pointer;
-    font-size: 14px;
-    line-height: 1;
-
-    &:hover {
-      background: rgba(255, 69, 58, 0.15);
-      color: var(--accent-red);
-    }
-  }
-}
-
-.panel-body {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.tree-container,
-.editor-container {
-  flex: 1;
-  overflow: hidden;
 }
 
 // ─── Header ───
 .session-header {
-  padding: 10px 16px;
-  border-bottom: 0.5px solid var(--border-color);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-default);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: var(--bg-secondary);
+  background: var(--bg-surface);
   flex-shrink: 0;
 
   .header-info {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
   }
 
   .header-controls {
@@ -1090,12 +758,12 @@ function formatTime(iso: string): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: all var(--transition-fast);
 
@@ -1105,24 +773,24 @@ function formatTime(iso: string): string {
   }
 
   &.active {
-    background: rgba(10, 132, 255, 0.12);
-    color: var(--accent-blue);
+    background: var(--primary-light);
+    color: var(--primary);
   }
 
   &.danger:hover {
-    background: rgba(255, 69, 58, 0.12);
-    color: var(--accent-red);
+    background: var(--error-light);
+    color: var(--error);
   }
 }
 
 // ─── Context bar ───
 .context-bar {
-  padding: 6px 16px;
+  padding: 8px 16px;
   background: var(--bg-secondary);
-  border-bottom: 0.5px solid var(--border-color);
+  border-bottom: 1px solid var(--border-default);
   display: flex;
-  gap: 20px;
-  font-size: 12px;
+  gap: 24px;
+  font-size: var(--text-xs);
   flex-shrink: 0;
 
   .context-item {
@@ -1134,22 +802,25 @@ function formatTime(iso: string): string {
   .context-label {
     color: var(--text-tertiary);
     font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
 
   .context-value {
     color: var(--text-secondary);
     font-family: var(--font-mono);
-    padding: 1px 6px;
-    background: rgba(255, 255, 255, 0.04);
-    border-radius: 4px;
+    padding: 2px 8px;
+    background: var(--bg-hover);
+    border-radius: var(--radius-sm);
   }
 }
 
 // ─── Messages area ───
 .messages-area {
   flex: 1;
-  padding: 16px;
+  padding: 20px 16px;
   overflow-y: auto;
+  line-height: 1.6;
 }
 
 .empty-chat {
@@ -1162,7 +833,7 @@ function formatTime(iso: string): string {
 
   .empty-icon {
     margin-bottom: 16px;
-    color: var(--text-tertiary);
+    color: var(--text-disabled);
   }
 }
 
@@ -1170,7 +841,7 @@ function formatTime(iso: string): string {
 .message-row {
   display: flex;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
   animation: slideUp 0.3s ease-out;
 
   &.user {
@@ -1192,48 +863,49 @@ function formatTime(iso: string): string {
 }
 
 .avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 700;
   color: #fff;
 
   &.ai {
-    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+    background: var(--primary);
   }
 
   &.user {
-    background: var(--accent-green);
+    background: var(--accent-teal);
   }
 }
 
 // ─── Bubbles ───
 .bubble {
-  max-width: 72%;
-  padding: 10px 14px;
-  line-height: 1.65;
-  font-size: 14px;
+  max-width: 75%;
+  padding: 12px 16px;
+  line-height: 1.6;
+  font-size: var(--text-md);
   word-break: break-word;
+  overflow-wrap: break-word;
 
   &.user {
-    background: var(--accent-blue);
+    background: var(--primary);
     color: #fff;
-    border-radius: 18px 18px 4px 18px;
+    border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);
 
     .bubble-time {
-      color: rgba(255, 255, 255, 0.6);
+      color: rgba(255, 255, 255, 0.7);
     }
   }
 
   &.assistant {
     background: var(--bg-secondary);
     color: var(--text-primary);
-    border-radius: 18px 18px 18px 4px;
-    border: 0.5px solid var(--border-color);
+    border-radius: var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius-sm);
+    border: 1px solid var(--border-default);
 
     .bubble-time {
       color: var(--text-tertiary);
@@ -1241,19 +913,24 @@ function formatTime(iso: string): string {
   }
 
   &.system {
-    background: rgba(255, 69, 58, 0.12);
-    color: var(--accent-red);
-    font-size: 13px;
-    max-width: 100%;
-    border-radius: 12px;
-    border: 0.5px solid rgba(255, 69, 58, 0.2);
-    text-align: center;
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    max-width: 80%;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-default);
+    text-align: left;
+
+    .bubble-time {
+      color: var(--text-tertiary);
+    }
   }
 }
 
 .bubble-content {
   word-break: break-word;
   white-space: pre-wrap;
+  overflow-wrap: break-word;
 
   &.markdown-body {
     margin: 0;
@@ -1266,22 +943,24 @@ function formatTime(iso: string): string {
     }
 
     :deep(code) {
-      background: rgba(255, 255, 255, 0.08);
+      background: var(--bg-hover);
       padding: 2px 6px;
-      border-radius: 4px;
+      border-radius: var(--radius-sm);
       font-family: var(--font-mono);
-      font-size: 0.88em;
+      font-size: 0.9em;
     }
 
     :deep(pre) {
       background: var(--bg-primary);
-      color: #e1e4e8;
-      padding: 14px;
-      border-radius: 10px;
-      overflow-x: auto;
+      color: var(--text-primary);
+      padding: 12px;
+      border-radius: var(--radius-md);
       margin: 12px 0;
       font-size: 0.85em;
-      border: 0.5px solid var(--border-color);
+      border: 1px solid var(--border-default);
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
 
       code {
         background: transparent;
@@ -1291,7 +970,7 @@ function formatTime(iso: string): string {
     }
 
     :deep(a) {
-      color: var(--accent-blue);
+      color: var(--primary);
       text-decoration: none;
 
       &:hover { text-decoration: underline; }
@@ -1305,42 +984,48 @@ function formatTime(iso: string): string {
       padding-left: 24px;
     }
 
-    :deep(li) { margin: 4px 0; }
+    :deep(li) {
+      margin: 4px 0;
+      line-height: 1.6;
+    }
 
     :deep(blockquote) {
       margin: 8px 0;
       padding: 4px 12px;
-      border-left: 3px solid var(--accent-blue);
+      border-left: 3px solid var(--primary);
       color: var(--text-secondary);
+      background: var(--primary-lighter);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     }
   }
 }
 
 .bubble-time {
-  font-size: 11px;
-  margin-top: 4px;
+  font-size: var(--text-xs);
+  margin-top: 6px;
   text-align: right;
+  color: var(--text-tertiary);
 }
 
 // ─── Thinking block ───
 .thinking-block {
-  background: rgba(255, 159, 10, 0.08);
-  border-radius: 8px;
+  background: var(--bg-hover);
+  border-radius: var(--radius-md);
   padding: 10px 12px;
   margin-bottom: 10px;
-  border-left: 3px solid var(--accent-orange);
+  border-left: 3px solid var(--border-default);
 
   &.streaming {
-    border-left-color: var(--accent-orange);
+    border-left-color: var(--primary);
     animation: thinkingPulse 2s ease-in-out infinite;
   }
 
   .thinking-label {
     font-weight: 600;
-    font-size: 0.88em;
+    font-size: var(--text-sm);
     cursor: pointer;
     user-select: none;
-    color: var(--accent-orange);
+    color: var(--text-secondary);
     padding: 0;
     margin: 0 0 6px 0;
 
@@ -1348,46 +1033,46 @@ function formatTime(iso: string): string {
   }
 
   .thinking-content {
-    font-size: 0.92em;
-    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
   }
 }
 
 // ─── Tool calls ───
 .tool-calls-log {
-  margin-bottom: 8px;
-  padding: 6px 0;
-  border-bottom: 0.5px solid var(--border-color);
+  margin-bottom: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-default);
 
   .tool-call-item {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     padding: 4px 0;
-    font-size: 12px;
-    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    color: var(--text-tertiary);
   }
 
   .tool-icon {
-    color: var(--accent-purple);
+    color: var(--text-tertiary);
     display: flex;
     align-items: center;
   }
 
   .tool-name {
     font-weight: 600;
-    color: var(--accent-purple);
+    color: var(--text-secondary);
     font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 1px 6px;
-    background: rgba(191, 90, 242, 0.1);
-    border-radius: 4px;
+    font-size: var(--text-xs);
+    padding: 2px 8px;
+    background: var(--bg-hover);
+    border-radius: var(--radius-sm);
   }
 
   .tool-args {
     color: var(--text-tertiary);
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: var(--text-xs);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1396,9 +1081,9 @@ function formatTime(iso: string): string {
 }
 
 .abort-area {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 0.5px solid var(--border-color);
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-default);
   display: flex;
   justify-content: flex-end;
 }
@@ -1406,19 +1091,19 @@ function formatTime(iso: string): string {
 .abort-btn {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border: 0.5px solid rgba(255, 69, 58, 0.3);
-  background: rgba(255, 69, 58, 0.1);
-  color: var(--accent-red);
-  border-radius: 6px;
-  font-size: 12px;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
   cursor: pointer;
   transition: all var(--transition-fast);
 
   &:hover {
-    background: rgba(255, 69, 58, 0.2);
-    border-color: rgba(255, 69, 58, 0.5);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
   }
 }
 
@@ -1440,13 +1125,37 @@ function formatTime(iso: string): string {
   }
 }
 
+// ─── Loading indicator ───
+.loading-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+}
+
+.loading-spinner-small {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-default);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.loading-text {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
 // ─── Streaming cursor ───
 .streaming-text {
   .cursor {
     display: inline-block;
     width: 2px;
     height: 1em;
-    background: var(--accent-green);
+    background: var(--primary);
     margin-left: 2px;
     vertical-align: text-bottom;
     animation: cursorBlink 1s step-end infinite;
@@ -1455,11 +1164,11 @@ function formatTime(iso: string): string {
 
 // ─── Input area ───
 .input-area {
-  padding: 12px 16px;
-  border-top: 0.5px solid var(--border-color);
-  background: var(--bg-secondary);
+  padding: 16px;
+  border-top: 1px solid var(--border-default);
+  background: var(--bg-surface);
   display: flex;
-  gap: 10px;
+  gap: 12px;
   align-items: flex-end;
   flex-shrink: 0;
 
@@ -1472,19 +1181,30 @@ function formatTime(iso: string): string {
     width: 100%;
 
     :deep(.n-input) {
-      background: var(--bg-primary);
-      border-radius: 12px;
+      background: var(--bg-surface);
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border-default);
+      transition: all var(--transition-fast);
+
+      &:hover {
+        border-color: var(--text-disabled);
+      }
+
+      &.n-input--focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px var(--primary-light);
+      }
     }
 
     :deep(.n-input__textarea) {
       font-family: var(--font-sans);
-      font-size: 14px;
+      font-size: var(--text-md);
       color: var(--text-primary);
     }
 
     :deep(.n-input__textarea-el) {
       &::placeholder {
-        color: var(--text-tertiary);
+        color: var(--text-disabled);
       }
     }
   }
@@ -1494,23 +1214,23 @@ function formatTime(iso: string): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border: none;
-  background: var(--accent-blue);
+  background: var(--primary);
   color: #fff;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: all var(--transition-fast);
   flex-shrink: 0;
 
   &:hover:not(:disabled) {
-    background: #409CFF;
+    background: var(--primary-hover);
     transform: scale(1.05);
   }
 
   &:disabled {
-    opacity: 0.3;
+    opacity: 0.4;
     cursor: not-allowed;
   }
 
@@ -1519,132 +1239,11 @@ function formatTime(iso: string): string {
   }
 }
 
-// ─── Terminal area ───
-.terminal-area {
-  height: 260px;
-  min-height: 120px;
-  display: flex;
-  flex-direction: column;
-  border-top: 0.5px solid var(--border-color);
-  flex-shrink: 0;
-}
-
-.terminal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 12px;
-  background: var(--bg-secondary);
-  border-bottom: 0.5px solid var(--border-color);
-  flex-shrink: 0;
-
-  .terminal-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-secondary);
-  }
-
-  .terminal-header-actions {
-    display: flex;
-    gap: 2px;
-  }
-}
-
-// ─── Command suggestions ───
-.command-suggestions {
-  position: absolute;
-  bottom: 100%;
-  left: 0;
-  right: 0;
-  max-height: 320px;
-  overflow-y: auto;
-  background: var(--bg-secondary);
-  border: 0.5px solid var(--border-color);
-  border-bottom: none;
-  border-radius: 12px 12px 0 0;
-  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4);
-  z-index: 10;
-  margin-bottom: 4px;
-
-  .suggestions-header {
-    padding: 8px 12px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--text-tertiary);
-    border-bottom: 0.5px solid var(--border-color);
-    position: sticky;
-    top: 0;
-    background: var(--bg-secondary);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-
-    .suggestions-count {
-      font-size: 10px;
-      padding: 1px 6px;
-      background: rgba(10, 132, 255, 0.15);
-      color: var(--accent-blue);
-      border-radius: 8px;
-    }
-  }
-
-  .suggestions-list {
-    padding: 4px;
-  }
-
-  .suggestion-item {
-    padding: 8px 10px;
-    cursor: pointer;
-    transition: background var(--transition-fast);
-    border-radius: 6px;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-
-    &:hover, &.active {
-      background: var(--bg-hover);
-    }
-
-    &.active {
-      outline: 1px solid var(--accent-blue);
-      outline-offset: -1px;
-    }
-
-    .suggestion-main {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-
-    .suggestion-name {
-      font-weight: 600;
-      color: var(--text-primary);
-      font-size: 13px;
-      font-family: var(--font-mono);
-      white-space: nowrap;
-    }
-
-    .suggestion-usage {
-      font-size: 11px;
-      color: var(--text-tertiary);
-      font-family: var(--font-mono);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .suggestion-desc {
-      color: var(--text-secondary);
-      font-size: 12px;
-      line-height: 1.3;
-    }
-  }
-}
-
 // ─── Animations ───
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 @keyframes slideUp {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }

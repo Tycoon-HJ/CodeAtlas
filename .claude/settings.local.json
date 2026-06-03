@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx vue-tsc *)",
+      "Bash(cargo check *)",
+      "Read(//d/txt/**)",
+      "Bash(\"C:/Users/yinha/AppData/Roaming/npm/codex.cmd\" exec *)",
+      "Bash(where cargo *)",
+      "Bash(/c/Program Files \\(x86\\)/Rust stable MSVC 1.95/bin/cargo check *)",
+      "Bash(cmd.exe *)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(powershell.exe *)",
+      "Read(//c/Users/yinha/.cargo/bin/**)",
+      "Read(//c/Users/yinha/.rustup//**)",
+      "Bash(/c/Users/yinha/.cargo/bin/cargo.exe check *)"
+    ]
+  }
+}

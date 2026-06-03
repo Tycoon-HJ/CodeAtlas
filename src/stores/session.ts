@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import type { Session, Message, SessionStatus } from '@/types'
+import type { Session, Message, SessionStatus, ToolCall } from '@/types'
 import * as api from '@/api'
 
 // 会话上下文
@@ -12,8 +12,8 @@ export interface SessionContext {
   projectPath: string // 项目路径
 }
 
-// 工具调用记录
-export interface ToolCall {
+// 工具调用记录（用于流式显示）
+export interface StreamingToolCall {
   sessionId: string
   toolId: string
   toolName: string
@@ -31,7 +31,7 @@ export const useSessionStore = defineStore('session', () => {
   const streamingThinking = ref<Record<string, string>>({})
   const streamingContent = ref<Record<string, string>>({})
   const sessionContexts = ref<Record<string, SessionContext>>({})
-  const toolCalls = ref<Record<string, ToolCall[]>>({})
+  const toolCalls = ref<Record<string, StreamingToolCall[]>>({})
   const pendingPermissions = ref<Record<string, any>>({})
   const pendingTrustPrompts = ref<Record<string, any>>({})
   let unlistenOutput: UnlistenFn | null = null
@@ -75,7 +75,7 @@ export const useSessionStore = defineStore('session', () => {
       streamingThinking.value[payload.session_id] = payload.thinking || ''
     })
 
-    unlistenOutput = await listen('claude-output', async (event: any) => {
+    unlistenOutput = await listen('claude-output', (event: any) => {
       const payload = event.payload
       if (!payload) return
 
@@ -87,20 +87,44 @@ export const useSessionStore = defineStore('session', () => {
         next.delete(sid)
         pendingResponses.value = next
 
+        const content = payload.content || ''
         const thinking = streamingThinking.value[sid] || payload.thinking || ''
-        const aiMsg: Message = {
+        const toolCallsData = payload.toolCalls || toolCalls.value[sid] || []
+
+        // Check if this is an error message
+        const isError = content.startsWith('无法启动') || content.startsWith('Error:') || content.startsWith('错误:') || content.includes('not found') || content.includes('failed')
+
+        // Build metadata with thinking and tool calls
+        const metadata: Record<string, any> = {}
+        if (thinking) {
+          metadata.thinking = thinking
+        }
+        if (toolCallsData && toolCallsData.length > 0) {
+          metadata.toolCalls = toolCallsData
+        }
+
+        const msg: Message = {
           id: crypto.randomUUID(),
           sessionId: sid,
-          type: 'assistant',
-          content: payload.content || 'Claude CLI 未返回内容',
+          type: isError ? 'system' : 'assistant',
+          content: content || 'Claude CLI 未返回内容',
           thinking: thinking || undefined,
+          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
           createdAt: new Date().toISOString(),
         }
-        await api.createMessage(aiMsg.id, aiMsg.sessionId, aiMsg.type, aiMsg.content, aiMsg.createdAt, aiMsg.thinking)
-        messages.value.push(aiMsg)
+
+        // Clear streaming state immediately (before persistence)
         delete streamingThinking.value[sid]
         delete streamingContent.value[sid]
         delete toolCalls.value[sid]
+
+        // Push to memory immediately (UI updates right away)
+        messages.value.push(msg)
+
+        // Persist to backend in background (non-blocking)
+        api.createMessage(msg.id, msg.sessionId, msg.type, msg.content, msg.createdAt, msg.thinking, msg.metadata)
+          .then(() => console.log('[Session] Message persisted:', { sessionId: sid, type: msg.type, contentLength: content.length }))
+          .catch((persistErr) => console.error('[Session] Failed to persist message:', persistErr))
       } else {
         streamingContent.value[sid] = payload.content || ''
       }
@@ -183,30 +207,71 @@ export const useSessionStore = defineStore('session', () => {
     return streamingContent.value[sessionId] || ''
   }
 
-  function getToolCalls(sessionId: string): ToolCall[] {
+  function getToolCalls(sessionId: string): StreamingToolCall[] {
     return toolCalls.value[sessionId] || []
   }
 
   async function fetchSessions() {
     loading.value = true
     try {
-      sessions.value = await api.listSessions()
+      const allSessions = await api.listSessions()
+      // Filter out sessions without messages (empty sessions)
+      const sessionsWithMessages: Session[] = []
+      for (const session of allSessions) {
+        const messages = await api.listMessages(session.id)
+        if (messages.length > 0) {
+          sessionsWithMessages.push(session)
+        }
+      }
+      sessions.value = sessionsWithMessages
     } finally {
       loading.value = false
     }
   }
 
-  async function createSession(taskId: string, providerId: string) {
+  async function createSession(taskId: string, providerId: string, saveToBackend: boolean = true) {
     const now = new Date().toISOString()
-    const session = await api.createSession(
-      crypto.randomUUID(),
-      taskId,
-      providerId,
-      now,
-      now
-    )
-    sessions.value.push(session)
-    return session
+    const sessionId = crypto.randomUUID()
+
+    if (saveToBackend) {
+      // Save to backend immediately
+      const session = await api.createSession(sessionId, taskId, providerId, now, now)
+      sessions.value.push(session)
+      return session
+    } else {
+      // Create temporary session (not saved to backend yet)
+      const session: Session = {
+        id: sessionId,
+        taskId,
+        providerId,
+        status: 'created',
+        tokenInput: 0,
+        tokenOutput: 0,
+        cost: 0,
+        createdAt: now,
+        updatedAt: now,
+      }
+      sessions.value.push(session)
+      return session
+    }
+  }
+
+  async function saveSessionToBackend(session: Session) {
+    try {
+      const now = new Date().toISOString()
+      // Update the session's updatedAt timestamp
+      session.updatedAt = now
+      await api.createSession(
+        session.id,
+        session.taskId,
+        session.providerId,
+        session.createdAt,
+        now
+      )
+      console.log('[Session] Session saved to backend:', session.id)
+    } catch (e) {
+      console.error('[Session] Failed to save session to backend:', e)
+    }
   }
 
   async function getOrCreateActiveSession(projectId: string, providerId: string) {
@@ -247,23 +312,35 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  async function addMessage(message: Message) {
-    await api.createMessage(
+  async function updateSessionTitle(id: string, title: string) {
+    await api.updateSessionTitle(id, title)
+    const session = sessions.value.find((s) => s.id === id)
+    if (session) {
+      session.title = title
+    }
+  }
+
+  function addMessage(message: Message) {
+    messages.value.push(message)
+    // Persist in background (non-blocking)
+    api.createMessage(
       message.id,
       message.sessionId,
       message.type,
       message.content,
       message.createdAt,
-      message.thinking
-    )
-    messages.value.push(message)
+      message.thinking,
+      message.metadata
+    ).catch((e) => console.error('[Session] Failed to persist message:', e))
   }
 
   async function fetchMessages(sessionId: string) {
     const raw = await api.listMessages(sessionId)
+    console.log(`[Session] fetchMessages for ${sessionId}:`, raw.length, 'messages', raw)
     messages.value = raw.map((m: any) => ({
       ...m,
       thinking: m.metadata?.thinking ?? undefined,
+      metadata: m.metadata ?? undefined,
     }))
   }
 
@@ -306,11 +383,13 @@ export const useSessionStore = defineStore('session', () => {
     toolCalls,
     fetchSessions,
     createSession,
+    saveSessionToBackend,
     getOrCreateActiveSession,
     getActiveSession,
     updateSessionStatus,
     deleteSession,
     addMessage,
+    updateSessionTitle,
     fetchMessages,
     setCurrentSession,
     initClaudeListener,

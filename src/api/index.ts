@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import type { Workspace, Project, Session, Message } from '@/types'
+import type { Workspace, Project, Session, Message, MessageMetadata } from '@/types'
 
 // ─── Greet ───
 
@@ -72,6 +72,10 @@ export async function deleteSession(id: string): Promise<boolean> {
   return invoke('delete_session', { id })
 }
 
+export async function updateSessionTitle(id: string, title: string): Promise<boolean> {
+  return invoke('update_session_title', { id, title })
+}
+
 // ─── Message ───
 
 export async function listMessages(sessionId: string): Promise<Message[]> {
@@ -80,9 +84,10 @@ export async function listMessages(sessionId: string): Promise<Message[]> {
 
 export async function createMessage(
   id: string, sessionId: string, msgType: string,
-  content: string, createdAt: string, thinking?: string
+  content: string, createdAt: string, thinking?: string,
+  metadata?: MessageMetadata
 ): Promise<Message> {
-  return invoke('create_message', { id, sessionId, msgType, content, createdAt, thinking })
+  return invoke('create_message', { id, sessionId, msgType, content, createdAt, thinking, metadata })
 }
 
 export async function deleteMessages(sessionId: string): Promise<boolean> {
@@ -102,16 +107,19 @@ export async function sendToClaude(
   })
 }
 
-export async function listProviders(): Promise<{ id: string; name: string; available: boolean }[]> {
-  return invoke('list_providers')
+export async function sendMessage(
+  providerId: string, sessionId: string, message: string, workingDir: string,
+  providerPath?: string, providerConfigPath?: string
+): Promise<void> {
+  return invoke('send_message', {
+    providerId, sessionId, message, workingDir,
+    providerPath: providerPath || null,
+    providerConfigPath: providerConfigPath || null,
+  })
 }
 
-export async function getClaudeCommands(sessionId: string, claudePath?: string, claudeConfigPath?: string): Promise<any> {
-  return invoke('get_claude_commands', {
-    sessionId,
-    claudePath: claudePath || null,
-    claudeConfigPath: claudeConfigPath || null,
-  })
+export async function listProviders(): Promise<{ id: string; name: string; available: boolean }[]> {
+  return invoke('list_providers')
 }
 
 export async function abortClaude(sessionId: string): Promise<void> {
@@ -126,16 +134,6 @@ export async function respondTrustPrompt(sessionId: string, trust: boolean): Pro
   return invoke('respond_trust_prompt', { sessionId, trust })
 }
 
-// ─── File Watcher ───
-
-export async function startFileWatcher(path: string): Promise<void> {
-  return invoke('start_file_watcher', { path })
-}
-
-export async function stopFileWatcher(): Promise<void> {
-  return invoke('stop_file_watcher')
-}
-
 // ─── Logging ───
 
 export async function getLogPath(): Promise<string> {
@@ -146,6 +144,31 @@ export async function getRecentLogs(count: number): Promise<string[]> {
   return invoke('get_recent_logs', { count })
 }
 
+// ─── Interactive Terminal ───
+
+export async function spawnTerminal(
+  sessionId: string, workingDir: string,
+  claudePath?: string, cols = 120, rows = 40
+): Promise<void> {
+  return invoke('spawn_terminal', {
+    sessionId, workingDir,
+    claudePath: claudePath || null,
+    cols, rows,
+  })
+}
+
+export async function writeTerminal(sessionId: string, data: string): Promise<void> {
+  return invoke('write_terminal', { sessionId, data })
+}
+
+export async function resizeTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
+  return invoke('resize_terminal', { sessionId, cols, rows })
+}
+
+export async function closeTerminal(sessionId: string): Promise<void> {
+  return invoke('close_terminal', { sessionId })
+}
+
 // ─── Settings ───
 
 export async function loadSettings(): Promise<any> {
@@ -154,4 +177,14 @@ export async function loadSettings(): Promise<any> {
 
 export async function saveSettings(settings: any): Promise<void> {
   return invoke('save_settings', { settings })
+}
+
+// ─── Agent State ───
+
+export async function loadAgentState(): Promise<{ enabledProviders: string[] }> {
+  return invoke('load_agent_state')
+}
+
+export async function saveAgentState(state: { enabledProviders: string[] }): Promise<void> {
+  return invoke('save_agent_state', { state })
 }

@@ -13,6 +13,8 @@ export interface AppSettings {
   logLevel: string
   claudePath: string
   claudeConfigPath: string
+  codexPath: string
+  codexConfigPath: string
   fontSize: number
   autoScroll: boolean
   autoRefresh: boolean
@@ -29,6 +31,8 @@ export const useSettingsStore = defineStore('settings', () => {
     logLevel: 'info',
     claudePath: '',
     claudeConfigPath: '',
+    codexPath: '',
+    codexConfigPath: '',
     fontSize: 14,
     autoScroll: true,
     autoRefresh: true,

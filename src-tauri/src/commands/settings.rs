@@ -14,6 +14,8 @@ pub struct AppSettings {
     pub log_level: String,
     pub claude_path: String,
     pub claude_config_path: String,
+    pub codex_path: String,
+    pub codex_config_path: String,
 }
 
 impl Default for AppSettings {
@@ -27,6 +29,22 @@ impl Default for AppSettings {
             log_level: "info".into(),
             claude_path: String::new(),
             claude_config_path: String::new(),
+            codex_path: String::new(),
+            codex_config_path: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentState {
+    pub enabled_providers: Vec<String>,
+}
+
+impl Default for AgentState {
+    fn default() -> Self {
+        Self {
+            enabled_providers: vec!["claude".into()],
         }
     }
 }
@@ -39,5 +57,16 @@ pub fn load_settings(app: AppHandle) -> AppSettings {
 #[tauri::command]
 pub fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
     store::save_json(&app, "settings", &settings);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn load_agent_state(app: AppHandle) -> AgentState {
+    store::load_json(&app, "agent_state").unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn save_agent_state(app: AppHandle, state: AgentState) -> Result<(), String> {
+    store::save_json(&app, "agent_state", &state);
     Ok(())
 }

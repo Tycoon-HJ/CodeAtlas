@@ -27,11 +27,12 @@ const description = computed(() => {
   const req = props.request
   // Build a human-readable description
   const parts: string[] = []
+  if (req.message) parts.push(req.message)
   if (req.description) parts.push(req.description)
   if (req.command) parts.push(`命令: ${req.command}`)
   if (req.path) parts.push(`路径: ${req.path}`)
   if (req.tool) parts.push(`工具: ${req.tool}`)
-  if (req.input) parts.push(`参数: ${JSON.stringify(req.input, null, 2)}`)
+  if (req.input && Object.keys(req.input).length > 0) parts.push(`参数: ${JSON.stringify(req.input, null, 2)}`)
   return parts.join('\n') || JSON.stringify(req, null, 2)
 })
 </script>
@@ -49,8 +50,8 @@ const description = computed(() => {
     <div class="permission-content">
       <div class="permission-icon">
         <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-          <circle cx="20" cy="20" r="18" stroke="var(--accent-orange)" stroke-width="2"/>
-          <path d="M20 12v10M20 26v2" stroke="var(--accent-orange)" stroke-width="2.5" stroke-linecap="round"/>
+          <circle cx="20" cy="20" r="18" stroke="var(--warning)" stroke-width="2"/>
+          <path d="M20 12v10M20 26v2" stroke="var(--warning)" stroke-width="2.5" stroke-linecap="round"/>
         </svg>
       </div>
       <div class="permission-info">
@@ -97,7 +98,7 @@ const description = computed(() => {
   background: var(--bg-primary);
   padding: 10px 12px;
   border-radius: 8px;
-  border: 0.5px solid var(--border-color);
+  border: 1px solid var(--border-default);
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--font-mono);

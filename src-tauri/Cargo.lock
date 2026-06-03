@@ -433,6 +433,7 @@ dependencies = [
 name = "codeatlas-studio"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dirs-next",
  "notify",
  "once_cell",

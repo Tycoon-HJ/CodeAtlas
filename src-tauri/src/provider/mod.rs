@@ -1,4 +1,5 @@
 pub mod claude_adapter;
+pub mod codex_adapter;
 
 use tauri::AppHandle;
 
@@ -52,6 +53,7 @@ impl ProviderRegistry {
         };
         // Register built-in adapters
         registry.register(Box::new(claude_adapter::ClaudeAdapter));
+        registry.register(Box::new(codex_adapter::CodexAdapter));
         registry
     }
 

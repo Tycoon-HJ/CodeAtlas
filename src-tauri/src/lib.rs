@@ -52,23 +52,29 @@ pub fn run() {
             commands::session::create_session,
             commands::session::update_session_status,
             commands::session::delete_session,
+            commands::session::update_session_title,
             // Message
             commands::message::list_messages,
             commands::message::create_message,
             commands::message::delete_messages,
             // Claude / Provider
             commands::claude::send_to_claude,
+            commands::claude::send_message,
             commands::claude::abort_claude,
             commands::claude::list_providers,
-            commands::claude::get_claude_commands,
             commands::claude::respond_permission,
             commands::claude::respond_trust_prompt,
+            // Interactive Terminal
+            commands::claude::spawn_terminal,
+            commands::claude::write_terminal,
+            commands::claude::resize_terminal,
+            commands::claude::close_terminal,
             // Settings
             commands::settings::load_settings,
             commands::settings::save_settings,
-            // File watcher
-            commands::file::start_file_watcher,
-            commands::file::stop_file_watcher,
+            // Agent State
+            commands::settings::load_agent_state,
+            commands::settings::save_agent_state,
             // Logging
             get_log_path,
             get_recent_logs,
